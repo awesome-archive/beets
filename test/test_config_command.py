@@ -7,11 +7,11 @@ import yaml
 from mock import patch
 from tempfile import mkdtemp
 from shutil import rmtree
+import unittest
 
 from beets import ui
 from beets import config
 
-from test._common import unittest
 from test.helper import TestHelper
 from beets.library import Library
 import six
@@ -45,7 +45,7 @@ class ConfigCommandTest(unittest.TestCase, TestHelper):
 
     def _run_with_yaml_output(self, *args):
         output = self.run_with_output(*args)
-        return yaml.load(output)
+        return yaml.safe_load(output)
 
     def test_show_user_config(self):
         output = self._run_with_yaml_output('config', '-c')

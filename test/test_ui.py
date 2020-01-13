@@ -24,10 +24,10 @@ import subprocess
 import platform
 from copy import deepcopy
 import six
+import unittest
 
 from mock import patch, Mock
 from test import _common
-from test._common import unittest
 from test.helper import capture_stdout, has_program, TestHelper, control_stdin
 
 from beets import library
@@ -35,11 +35,12 @@ from beets import ui
 from beets.ui import commands
 from beets import autotag
 from beets.autotag.match import distance
-from beets.mediafile import MediaFile
+from mediafile import MediaFile
 from beets import config
 from beets import plugins
-from beets.util.confit import ConfigError
+from confuse import ConfigError
 from beets import util
+from beets.util import syspath, MoveOperation
 
 
 class ListTest(unittest.TestCase):
@@ -125,7 +126,7 @@ class RemoveTest(_common.TestCase):
         item_path = os.path.join(_common.RSRC, b'full.mp3')
         self.i = library.Item.from_path(item_path)
         self.lib.add(self.i)
-        self.i.move(True)
+        self.i.move(operation=MoveOperation.COPY)
 
     def test_remove_items_no_delete(self):
         self.io.addinput('y')
@@ -289,7 +290,7 @@ class ModifyTest(unittest.TestCase, TestHelper):
     def test_write_initial_key_tag(self):
         self.modify(u"initial_key=C#m")
         item = self.lib.items().get()
-        mediafile = MediaFile(item.path)
+        mediafile = MediaFile(syspath(item.path))
         self.assertEqual(mediafile.initial_key, u'C#m')
 
     def test_set_flexattr(self):
@@ -313,11 +314,11 @@ class ModifyTest(unittest.TestCase, TestHelper):
         item.write()
         item.store()
 
-        mediafile = MediaFile(item.path)
+        mediafile = MediaFile(syspath(item.path))
         self.assertEqual(mediafile.initial_key, u'C#m')
 
         self.modify(u"initial_key!")
-        mediafile = MediaFile(item.path)
+        mediafile = MediaFile(syspath(item.path))
         self.assertIsNone(mediafile.initial_key)
 
     def test_arg_parsing_colon_query(self):
@@ -420,8 +421,9 @@ class MoveTest(_common.TestCase):
         self.otherdir = os.path.join(self.temp_dir, b'testotherdir')
 
     def _move(self, query=(), dest=None, copy=False, album=False,
-              pretend=False):
-        commands.move_items(self.lib, dest, query, copy, album, pretend)
+              pretend=False, export=False):
+        commands.move_items(self.lib, dest, query, copy, album, pretend,
+                            export=export)
 
     def test_move_item(self):
         self._move()
@@ -475,6 +477,24 @@ class MoveTest(_common.TestCase):
         self.i.load()
         self.assertIn(b'srcfile', self.i.path)
 
+    def test_export_item_custom_dir(self):
+        self._move(dest=self.otherdir, export=True)
+        self.i.load()
+        self.assertEqual(self.i.path, self.itempath)
+        self.assertExists(self.otherdir)
+
+    def test_export_album_custom_dir(self):
+        self._move(dest=self.otherdir, album=True, export=True)
+        self.i.load()
+        self.assertEqual(self.i.path, self.itempath)
+        self.assertExists(self.otherdir)
+
+    def test_pretend_export_item(self):
+        self._move(dest=self.otherdir, pretend=True, export=True)
+        self.i.load()
+        self.assertIn(b'srcfile', self.i.path)
+        self.assertNotExists(self.otherdir)
+
 
 class UpdateTest(_common.TestCase):
     def setUp(self):
@@ -487,10 +507,14 @@ class UpdateTest(_common.TestCase):
         # Copy a file into the library.
         self.lib = library.Library(':memory:', self.libdir)
         item_path = os.path.join(_common.RSRC, b'full.mp3')
+        item_path_two = os.path.join(_common.RSRC, b'full.flac')
         self.i = library.Item.from_path(item_path)
+        self.i2 = library.Item.from_path(item_path_two)
         self.lib.add(self.i)
-        self.i.move(True)
-        self.album = self.lib.add_album([self.i])
+        self.lib.add(self.i2)
+        self.i.move(operation=MoveOperation.COPY)
+        self.i2.move(operation=MoveOperation.COPY)
+        self.album = self.lib.add_album([self.i, self.i2])
 
         # Album art.
         artfile = os.path.join(self.temp_dir, b'testart.jpg')
@@ -499,22 +523,26 @@ class UpdateTest(_common.TestCase):
         self.album.store()
         os.remove(artfile)
 
-    def _update(self, query=(), album=False, move=False, reset_mtime=True):
+    def _update(self, query=(), album=False, move=False, reset_mtime=True,
+                fields=None):
         self.io.addinput('y')
         if reset_mtime:
             self.i.mtime = 0
             self.i.store()
-        commands.update_items(self.lib, query, album, move, False)
+        commands.update_items(self.lib, query, album, move, False,
+                              fields=fields)
 
     def test_delete_removes_item(self):
         self.assertTrue(list(self.lib.items()))
         os.remove(self.i.path)
+        os.remove(self.i2.path)
         self._update()
         self.assertFalse(list(self.lib.items()))
 
     def test_delete_removes_album(self):
         self.assertTrue(self.lib.albums())
         os.remove(self.i.path)
+        os.remove(self.i2.path)
         self._update()
         self.assertFalse(self.lib.albums())
 
@@ -522,11 +550,12 @@ class UpdateTest(_common.TestCase):
         artpath = self.album.artpath
         self.assertExists(artpath)
         os.remove(self.i.path)
+        os.remove(self.i2.path)
         self._update()
         self.assertNotExists(artpath)
 
     def test_modified_metadata_detected(self):
-        mf = MediaFile(self.i.path)
+        mf = MediaFile(syspath(self.i.path))
         mf.title = u'differentTitle'
         mf.save()
         self._update()
@@ -534,7 +563,7 @@ class UpdateTest(_common.TestCase):
         self.assertEqual(item.title, u'differentTitle')
 
     def test_modified_metadata_moved(self):
-        mf = MediaFile(self.i.path)
+        mf = MediaFile(syspath(self.i.path))
         mf.title = u'differentTitle'
         mf.save()
         self._update(move=True)
@@ -542,15 +571,35 @@ class UpdateTest(_common.TestCase):
         self.assertTrue(b'differentTitle' in item.path)
 
     def test_modified_metadata_not_moved(self):
-        mf = MediaFile(self.i.path)
+        mf = MediaFile(syspath(self.i.path))
         mf.title = u'differentTitle'
         mf.save()
         self._update(move=False)
         item = self.lib.items().get()
         self.assertTrue(b'differentTitle' not in item.path)
 
+    def test_selective_modified_metadata_moved(self):
+        mf = MediaFile(syspath(self.i.path))
+        mf.title = u'differentTitle'
+        mf.genre = u'differentGenre'
+        mf.save()
+        self._update(move=True, fields=['title'])
+        item = self.lib.items().get()
+        self.assertTrue(b'differentTitle' in item.path)
+        self.assertNotEqual(item.genre, u'differentGenre')
+
+    def test_selective_modified_metadata_not_moved(self):
+        mf = MediaFile(syspath(self.i.path))
+        mf.title = u'differentTitle'
+        mf.genre = u'differentGenre'
+        mf.save()
+        self._update(move=False, fields=['title'])
+        item = self.lib.items().get()
+        self.assertTrue(b'differentTitle' not in item.path)
+        self.assertNotEqual(item.genre, u'differentGenre')
+
     def test_modified_album_metadata_moved(self):
-        mf = MediaFile(self.i.path)
+        mf = MediaFile(syspath(self.i.path))
         mf.album = u'differentAlbum'
         mf.save()
         self._update(move=True)
@@ -559,15 +608,36 @@ class UpdateTest(_common.TestCase):
 
     def test_modified_album_metadata_art_moved(self):
         artpath = self.album.artpath
-        mf = MediaFile(self.i.path)
+        mf = MediaFile(syspath(self.i.path))
         mf.album = u'differentAlbum'
         mf.save()
         self._update(move=True)
         album = self.lib.albums()[0]
         self.assertNotEqual(artpath, album.artpath)
+        self.assertIsNotNone(album.artpath)
+
+    def test_selective_modified_album_metadata_moved(self):
+        mf = MediaFile(syspath(self.i.path))
+        mf.album = u'differentAlbum'
+        mf.genre = u'differentGenre'
+        mf.save()
+        self._update(move=True, fields=['album'])
+        item = self.lib.items().get()
+        self.assertTrue(b'differentAlbum' in item.path)
+        self.assertNotEqual(item.genre, u'differentGenre')
+
+    def test_selective_modified_album_metadata_not_moved(self):
+        mf = MediaFile(syspath(self.i.path))
+        mf.album = u'differentAlbum'
+        mf.genre = u'differentGenre'
+        mf.save()
+        self._update(move=True, fields=['genre'])
+        item = self.lib.items().get()
+        self.assertTrue(b'differentAlbum' not in item.path)
+        self.assertEqual(item.genre, u'differentGenre')
 
     def test_mtime_match_skips_update(self):
-        mf = MediaFile(self.i.path)
+        mf = MediaFile(syspath(self.i.path))
         mf.title = u'differentTitle'
         mf.save()
 
@@ -625,21 +695,6 @@ class ImportTest(_common.TestCase):
         config['import']['timid'] = True
         self.assertRaises(ui.UserError, commands.import_files, None, [],
                           None)
-
-
-class InputTest(_common.TestCase):
-    def setUp(self):
-        super(InputTest, self).setUp()
-        self.io.install()
-
-    def test_manual_search_gets_unicode(self):
-        # The input here uses "native strings": bytes on Python 2, Unicode on
-        # Python 3.
-        self.io.addinput('foö')
-        self.io.addinput('bár')
-        artist, album = commands.manual_search(False)
-        self.assertEqual(artist, u'foö')
-        self.assertEqual(album, u'bár')
 
 
 @_common.slow_test()
@@ -753,16 +808,18 @@ class ConfigTest(unittest.TestCase, TestHelper, _common.Assertions):
 
         self.run_command('test', lib=None)
         replacements = self.test_cmd.lib.replacements
-        self.assertEqual(replacements, [(re.compile(u'[xy]'), 'z')])
+        repls = [(p.pattern, s) for p, s in replacements]  # Compare patterns.
+        self.assertEqual(repls, [(u'[xy]', 'z')])
 
     def test_multiple_replacements_parsed(self):
         with self.write_config_file() as config:
             config.write("replace: {'[xy]': z, foo: bar}")
         self.run_command('test', lib=None)
         replacements = self.test_cmd.lib.replacements
-        self.assertEqual(replacements, [
-            (re.compile(u'[xy]'), u'z'),
-            (re.compile(u'foo'), u'bar'),
+        repls = [(p.pattern, s) for p, s in replacements]
+        self.assertEqual(repls, [
+            (u'[xy]', u'z'),
+            (u'foo', u'bar'),
         ])
 
     def test_cli_config_option(self):
@@ -861,6 +918,7 @@ class ConfigTest(unittest.TestCase, TestHelper, _common.Assertions):
         )
 
     def test_command_line_option_relative_to_working_dir(self):
+        config.read()
         os.chdir(self.temp_dir)
         self.run_command('--library', 'foo.db', 'test', lib=None)
         self.assert_equal_path(config['library'].as_filename(),
@@ -1166,13 +1224,14 @@ class CommonOptionsParserCliTest(unittest.TestCase, TestHelper):
     """
     def setUp(self):
         self.setup_beets()
-        self.lib = library.Library(':memory:')
         self.item = _common.item()
         self.item.path = b'xxx/yyy'
         self.lib.add(self.item)
         self.lib.add_album([self.item])
+        self.load_plugins()
 
     def tearDown(self):
+        self.unload_plugins()
         self.teardown_beets()
 
     def test_base(self):
@@ -1231,7 +1290,7 @@ class CommonOptionsParserCliTest(unittest.TestCase, TestHelper):
 
     def test_version(self):
         l = self.run_with_output(u'version')
-        self.assertIn(u'python version', l)
+        self.assertIn(u'Python version', l)
         self.assertIn(u'no plugins loaded', l)
 
         # # Need to have plugin loaded

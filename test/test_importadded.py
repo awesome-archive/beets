@@ -18,8 +18,8 @@ from __future__ import division, absolute_import, print_function
 """Tests for the `importadded` plugin."""
 
 import os
+import unittest
 
-from test._common import unittest
 from test.test_importer import ImportHelper, AutotagStub
 from beets import importer
 from beets import util
@@ -93,6 +93,7 @@ class ImportAddedTest(unittest.TestCase, ImportHelper):
         self.config['import']['copy'] = False
         self.config['import']['move'] = False
         self.config['import']['link'] = False
+        self.config['import']['hardlink'] = False
         self.assertAlbumImport()
 
     def test_import_album_with_preserved_mtimes(self):

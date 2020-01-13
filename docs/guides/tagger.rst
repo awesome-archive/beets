@@ -95,6 +95,9 @@ command-line options you should know:
 * ``beet import -C``: don't copy imported files to your music directory; leave
   them where they are
 
+* ``beet import -m``: move imported files to your music directory (overrides
+  the ``-c`` option)
+
 * ``beet import -l LOGFILE``: write a message to ``LOGFILE`` every time you skip
   an album or choose to take its tags "as-is" (see below) or the album is
   skipped as a duplicate; this lets you come back later and reexamine albums
@@ -231,16 +234,24 @@ If beets finds an album or item in your library that seems to be the same as the
 one you're importing, you may see a prompt like this::
 
     This album is already in the library!
-    [S]kip new, Keep both, Remove old?
+    [S]kip new, Keep both, Remove old, Merge all?
 
 Beets wants to keep you safe from duplicates, which can be a real pain, so you
-have three choices in this situation. You can skip importing the new music,
+have four choices in this situation. You can skip importing the new music,
 choosing to keep the stuff you already have in your library; you can keep both
-the old and the new music; or you can remove the existing music and choose the
-new stuff. If you choose that last "trump" option, any duplicates will be
+the old and the new music; you can remove the existing music and choose the
+new stuff; or you can merge all the new and old tracks into a single album.
+If you choose that "remove" option, any duplicates will be
 removed from your library database---and, if the corresponding files are located
 inside of your beets library directory, the files themselves will be deleted as
 well.
+
+If you choose "merge", beets will try re-importing the existing and new tracks
+as one bundle together.
+This is particularly helpful when you have an album that's missing some tracks
+and then want to import the remaining songs.
+The importer will ask you the same questions as it would if you were importing
+all tracks at once.
 
 If you choose to keep two identically-named albums, beets can avoid storing both
 in the same directory. See :ref:`aunique` for details.
@@ -261,7 +272,7 @@ Before you jump into acoustic fingerprinting with both feet, though, give beets
 a try without it. You may be surprised at how well metadata-based matching
 works.
 
-.. _Chromaprint: http://acoustid.org/chromaprint
+.. _Chromaprint: https://acoustid.org/chromaprint
 
 Album Art, Lyrics, Genres and Such
 ----------------------------------
@@ -281,7 +292,7 @@ sure the album is present in `the MusicBrainz database`_.  You can search on
 their site to make sure it's cataloged there. If not, anyone can edit
 MusicBrainz---so consider adding the data yourself.
 
-.. _the MusicBrainz database: http://musicbrainz.org/
+.. _the MusicBrainz database: https://musicbrainz.org/
 
 If you think beets is ignoring an album that's listed in MusicBrainz, please
 `file a bug report`_.
@@ -291,7 +302,8 @@ If you think beets is ignoring an album that's listed in MusicBrainz, please
 I Hope That Makes Sense
 -----------------------
 
-If I haven't made the process clear, please send an email to `the mailing
-list`_ and I'll try to improve this guide.
+If we haven't made the process clear, please post on `the discussion
+board`_ and we'll try to improve this guide.
 
-.. _the mailing list: http://groups.google.com/group/beets-users
+.. _the mailing list: https://groups.google.com/group/beets-users
+.. _the discussion board: https://discourse.beets.io

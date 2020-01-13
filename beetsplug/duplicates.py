@@ -21,7 +21,8 @@ import shlex
 
 from beets.plugins import BeetsPlugin
 from beets.ui import decargs, print_, Subcommand, UserError
-from beets.util import command_output, displayable_path, subprocess
+from beets.util import command_output, displayable_path, subprocess, \
+    bytestring_path, MoveOperation
 from beets.library import Item, Album
 import six
 
@@ -80,7 +81,7 @@ class DuplicatesPlugin(BeetsPlugin):
             help=u'report duplicates only if all attributes are set',
         )
         self._command.parser.add_option(
-            u'-k', u'--key',
+            u'-k', u'--key', dest='keys',
             action='append', metavar='KEY',
             help=u'report duplicates based on keys (use multiple times)',
         )
@@ -112,14 +113,14 @@ class DuplicatesPlugin(BeetsPlugin):
             self.config.set_args(opts)
             album = self.config['album'].get(bool)
             checksum = self.config['checksum'].get(str)
-            copy = self.config['copy'].get(str)
+            copy = bytestring_path(self.config['copy'].as_str())
             count = self.config['count'].get(bool)
             delete = self.config['delete'].get(bool)
             fmt = self.config['format'].get(str)
             full = self.config['full'].get(bool)
             keys = self.config['keys'].as_str_seq()
             merge = self.config['merge'].get(bool)
-            move = self.config['move'].get(str)
+            move = bytestring_path(self.config['move'].as_str())
             path = self.config['path'].get(bool)
             tiebreak = self.config['tiebreak'].get(dict)
             strict = self.config['strict'].get(bool)
@@ -174,17 +175,17 @@ class DuplicatesPlugin(BeetsPlugin):
         """
         print_(format(item, fmt))
         if copy:
-            item.move(basedir=copy, copy=True)
+            item.move(basedir=copy, operation=MoveOperation.COPY)
             item.store()
         if move:
-            item.move(basedir=move, copy=False)
+            item.move(basedir=move)
             item.store()
         if delete:
             item.remove(delete=True)
         if tag:
             try:
                 k, v = tag.split('=')
-            except:
+            except Exception:
                 raise UserError(
                     u"{}: can't parse k=v tag: {}".format(PLUGIN, tag)
                 )
@@ -204,7 +205,7 @@ class DuplicatesPlugin(BeetsPlugin):
                             u'computing checksum',
                             key, displayable_path(item.path))
             try:
-                checksum = command_output(args)
+                checksum = command_output(args).stdout
                 setattr(item, key, checksum)
                 item.store()
                 self._log.debug(u'computed checksum for {0} using {1}',
@@ -252,20 +253,19 @@ class DuplicatesPlugin(BeetsPlugin):
         "completeness" (objects with more non-null fields come first)
         and Albums are ordered by their track count.
         """
-        if tiebreak:
-            kind = 'items' if all(isinstance(o, Item)
-                                  for o in objs) else 'albums'
+        kind = 'items' if all(isinstance(o, Item) for o in objs) else 'albums'
+
+        if tiebreak and kind in tiebreak.keys():
             key = lambda x: tuple(getattr(x, k) for k in tiebreak[kind])
         else:
-            kind = Item if all(isinstance(o, Item) for o in objs) else Album
-            if kind is Item:
+            if kind == 'items':
                 def truthy(v):
                     # Avoid a Unicode warning by avoiding comparison
                     # between a bytes object and the empty Unicode
                     # string ''.
                     return v is not None and \
                         (v != '' if isinstance(v, six.text_type) else True)
-                fields = kind.all_keys()
+                fields = Item.all_keys()
                 key = lambda x: sum(1 for f in fields if truthy(getattr(x, f)))
             else:
                 key = lambda x: len(x.items())
@@ -311,7 +311,7 @@ class DuplicatesPlugin(BeetsPlugin):
                                     objs[0],
                                     displayable_path(o.path),
                                     displayable_path(missing.destination()))
-                    missing.move(copy=True)
+                    missing.move(operation=MoveOperation.COPY)
         return objs
 
     def _merge(self, objs):

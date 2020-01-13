@@ -18,21 +18,27 @@
 from __future__ import division, absolute_import, print_function
 import os
 import sys
+import errno
 import locale
 import re
 import shutil
 import fnmatch
-from collections import Counter
+import functools
+from collections import Counter, namedtuple
+from multiprocessing.pool import ThreadPool
 import traceback
 import subprocess
 import platform
 import shlex
 from beets.util import hidden
 import six
+from unidecode import unidecode
+from enum import Enum
 
 
 MAX_FILENAME_LENGTH = 200
 WINDOWS_MAGIC_PREFIX = u'\\\\?\\'
+SNI_SUPPORTED = sys.version_info >= (2, 7, 9)
 
 
 class HumanReadableException(Exception):
@@ -119,6 +125,15 @@ class FilesystemError(HumanReadableException):
             )
 
         return u'{0} {1}'.format(self._reasonstr(), clause)
+
+
+class MoveOperation(Enum):
+    """The file operations that e.g. various move functions can carry out.
+    """
+    MOVE = 0
+    COPY = 1
+    LINK = 2
+    HARDLINK = 3
 
 
 def normpath(path):
@@ -208,6 +223,13 @@ def sorted_walk(path, ignore=(), ignore_hidden=False, logger=None):
             yield res
 
 
+def path_as_posix(path):
+    """Return the string representation of the path with forward (/)
+    slashes.
+    """
+    return path.replace(b'\\', b'/')
+
+
 def mkdirall(path):
     """Make all the enclosing directories of path (like mkdir -p on the
     parent).
@@ -269,13 +291,13 @@ def prune_dirs(path, root=None, clutter=('.DS_Store', 'Thumbs.db')):
             continue
         clutter = [bytestring_path(c) for c in clutter]
         match_paths = [bytestring_path(d) for d in os.listdir(directory)]
-        if fnmatch_all(match_paths, clutter):
-            # Directory contains only clutter (or nothing).
-            try:
+        try:
+            if fnmatch_all(match_paths, clutter):
+                # Directory contains only clutter (or nothing).
                 shutil.rmtree(directory)
-            except OSError:
+            else:
                 break
-        else:
+        except OSError:
             break
 
 
@@ -397,7 +419,7 @@ def syspath(path, prefix=True):
             path = path.decode(encoding, 'replace')
 
     # Add the magic prefix if it isn't already there.
-    # http://msdn.microsoft.com/en-us/library/windows/desktop/aa365247.aspx
+    # https://msdn.microsoft.com/en-us/library/windows/desktop/aa365247.aspx
     if prefix and not path.startswith(WINDOWS_MAGIC_PREFIX):
         if path.startswith(u'\\\\'):
             # UNC path. Final path should look like \\?\UNC\...
@@ -409,6 +431,8 @@ def syspath(path, prefix=True):
 
 def samefile(p1, p2):
     """Safer equality for paths."""
+    if p1 == p2:
+        return True
     return shutil._samefile(syspath(p1), syspath(p2))
 
 
@@ -475,16 +499,15 @@ def move(path, dest, replace=False):
 def link(path, dest, replace=False):
     """Create a symbolic link from path to `dest`. Raises an OSError if
     `dest` already exists, unless `replace` is True. Does nothing if
-    `path` == `dest`."""
-    if (samefile(path, dest)):
+    `path` == `dest`.
+    """
+    if samefile(path, dest):
         return
 
-    path = syspath(path)
-    dest = syspath(dest)
-    if os.path.exists(dest) and not replace:
+    if os.path.exists(syspath(dest)) and not replace:
         raise FilesystemError(u'file exists', 'rename', (path, dest))
     try:
-        os.symlink(path, dest)
+        os.symlink(syspath(path), syspath(dest))
     except NotImplementedError:
         # raised on python >= 3.2 and Windows versions before Vista
         raise FilesystemError(u'OS does not support symbolic links.'
@@ -496,6 +519,30 @@ def link(path, dest, replace=False):
                 exc = u'OS does not support symbolic links.'
         raise FilesystemError(exc, 'link', (path, dest),
                               traceback.format_exc())
+
+
+def hardlink(path, dest, replace=False):
+    """Create a hard link from path to `dest`. Raises an OSError if
+    `dest` already exists, unless `replace` is True. Does nothing if
+    `path` == `dest`.
+    """
+    if samefile(path, dest):
+        return
+
+    if os.path.exists(syspath(dest)) and not replace:
+        raise FilesystemError(u'file exists', 'rename', (path, dest))
+    try:
+        os.link(syspath(path), syspath(dest))
+    except NotImplementedError:
+        raise FilesystemError(u'OS does not support hard links.'
+                              'link', (path, dest), traceback.format_exc())
+    except OSError as exc:
+        if exc.errno == errno.EXDEV:
+            raise FilesystemError(u'Cannot hard link across devices.'
+                                  'link', (path, dest), traceback.format_exc())
+        else:
+            raise FilesystemError(exc, 'link', (path, dest),
+                                  traceback.format_exc())
 
 
 def unique_path(path):
@@ -523,7 +570,7 @@ def unique_path(path):
 # Note: The Windows "reserved characters" are, of course, allowed on
 # Unix. They are forbidden here because they cause problems on Samba
 # shares, which are sufficiently common as to cause frequent problems.
-# http://msdn.microsoft.com/en-us/library/windows/desktop/aa365247.aspx
+# https://msdn.microsoft.com/en-us/library/windows/desktop/aa365247.aspx
 CHAR_REPLACE = [
     (re.compile(r'[\\/]'), u'_'),  # / and \ -- forbidden everywhere.
     (re.compile(r'^\.'), u'_'),  # Leading dot (hidden files on Unix).
@@ -723,7 +770,11 @@ def cpu_count():
             num = 0
     elif sys.platform == 'darwin':
         try:
-            num = int(command_output(['/usr/sbin/sysctl', '-n', 'hw.ncpu']))
+            num = int(command_output([
+                '/usr/sbin/sysctl',
+                '-n',
+                'hw.ncpu',
+                ]).stdout)
         except (ValueError, OSError, subprocess.CalledProcessError):
             num = 0
     else:
@@ -754,8 +805,15 @@ def convert_command_args(args):
     return [convert(a) for a in args]
 
 
+# stdout and stderr as bytes
+CommandOutput = namedtuple("CommandOutput", ("stdout", "stderr"))
+
+
 def command_output(cmd, shell=False):
     """Runs the command and returns its output after it has exited.
+
+    Returns a CommandOutput. The attributes ``stdout`` and ``stderr`` contain
+    byte strings of the respective output streams.
 
     ``cmd`` is a list of arguments starting with the command names. The
     arguments are bytes on Unix and strings on Windows.
@@ -771,10 +829,16 @@ def command_output(cmd, shell=False):
     """
     cmd = convert_command_args(cmd)
 
+    try:  # python >= 3.3
+        devnull = subprocess.DEVNULL
+    except AttributeError:
+        devnull = open(os.devnull, 'r+b')
+
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        stdin=devnull,
         close_fds=platform.system() != 'Windows',
         shell=shell
     )
@@ -785,7 +849,7 @@ def command_output(cmd, shell=False):
             cmd=' '.join(cmd),
             output=stdout + stderr,
         )
-    return stdout
+    return CommandOutput(stdout, stderr)
 
 
 def max_filename_length(path, limit=MAX_FILENAME_LENGTH):
@@ -941,3 +1005,71 @@ def raw_seconds_short(string):
         raise ValueError(u'String not in M:SS format')
     minutes, seconds = map(int, match.groups())
     return float(minutes * 60 + seconds)
+
+
+def asciify_path(path, sep_replace):
+    """Decodes all unicode characters in a path into ASCII equivalents.
+
+    Substitutions are provided by the unidecode module. Path separators in the
+    input are preserved.
+
+    Keyword arguments:
+    path -- The path to be asciified.
+    sep_replace -- the string to be used to replace extraneous path separators.
+    """
+    # if this platform has an os.altsep, change it to os.sep.
+    if os.altsep:
+        path = path.replace(os.altsep, os.sep)
+    path_components = path.split(os.sep)
+    for index, item in enumerate(path_components):
+        path_components[index] = unidecode(item).replace(os.sep, sep_replace)
+        if os.altsep:
+            path_components[index] = unidecode(item).replace(
+                os.altsep,
+                sep_replace
+            )
+    return os.sep.join(path_components)
+
+
+def par_map(transform, items):
+    """Apply the function `transform` to all the elements in the
+    iterable `items`, like `map(transform, items)` but with no return
+    value. The map *might* happen in parallel: it's parallel on Python 3
+    and sequential on Python 2.
+
+    The parallelism uses threads (not processes), so this is only useful
+    for IO-bound `transform`s.
+    """
+    if sys.version_info[0] < 3:
+        # multiprocessing.pool.ThreadPool does not seem to work on
+        # Python 2. We could consider switching to futures instead.
+        for item in items:
+            transform(item)
+    else:
+        pool = ThreadPool()
+        pool.map(transform, items)
+        pool.close()
+        pool.join()
+
+
+def lazy_property(func):
+    """A decorator that creates a lazily evaluated property. On first access,
+    the property is assigned the return value of `func`. This first value is
+    stored, so that future accesses do not have to evaluate `func` again.
+
+    This behaviour is useful when `func` is expensive to evaluate, and it is
+    not certain that the result will be needed.
+    """
+    field_name = '_' + func.__name__
+
+    @property
+    @functools.wraps(func)
+    def wrapper(self):
+        if hasattr(self, field_name):
+            return getattr(self, field_name)
+
+        value = func(self)
+        setattr(self, field_name, value)
+        return value
+
+    return wrapper

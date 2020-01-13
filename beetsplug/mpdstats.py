@@ -27,7 +27,6 @@ from beets import plugins
 from beets import library
 from beets.util import displayable_path
 from beets.dbcore import types
-import six
 
 # If we lose the connection, how many times do we want to retry and how
 # much time should we wait between retries?
@@ -46,20 +45,6 @@ def is_url(path):
     return path.split('://', 1)[0] in ['http', 'https']
 
 
-# Use the MPDClient internals to get unicode.
-# see http://www.tarmack.eu/code/mpdunicode.py for the general idea
-class MPDClient(mpd.MPDClient):
-    def _write_command(self, command, args=[]):
-        args = [six.text_type(arg).encode('utf-8') for arg in args]
-        super(MPDClient, self)._write_command(command, args)
-
-    def _read_line(self):
-        line = super(MPDClient, self)._read_line()
-        if line is not None:
-            return line.decode('utf-8')
-        return None
-
-
 class MPDClientWrapper(object):
     def __init__(self, log):
         self._log = log
@@ -67,7 +52,7 @@ class MPDClientWrapper(object):
         self.music_directory = (
             mpd_config['music_directory'].as_str())
 
-        self.client = MPDClient()
+        self.client = mpd.MPDClient(use_unicode=True)
 
     def connect(self):
         """Connect to the MPD.
@@ -122,17 +107,17 @@ class MPDClientWrapper(object):
         self.connect()
         return self.get(command, retries=retries - 1)
 
-    def playlist(self):
-        """Return the currently active playlist.  Prefixes paths with the
+    def currentsong(self):
+        """Return the path to the currently playing song.  Prefixes paths with the
         music_directory, to get the absolute path.
         """
-        result = {}
-        for entry in self.get('playlistinfo'):
+        result = None
+        entry = self.get('currentsong')
+        if 'file' in entry:
             if not is_url(entry['file']):
-                result[entry['id']] = os.path.join(
-                    self.music_directory, entry['file'])
+                result = os.path.join(self.music_directory, entry['file'])
             else:
-                result[entry['id']] = entry['file']
+                result = entry['file']
         return result
 
     def status(self):
@@ -265,38 +250,47 @@ class MPDStats(object):
         self.now_playing = None
 
     def on_play(self, status):
-        playlist = self.mpd.playlist()
-        path = playlist.get(status['songid'])
+
+        path = self.mpd.currentsong()
 
         if not path:
-            return
-
-        if is_url(path):
-            self._log.info(u'playing stream {0}', displayable_path(path))
             return
 
         played, duration = map(int, status['time'].split(':', 1))
         remaining = duration - played
 
-        if self.now_playing and self.now_playing['path'] != path:
-            skipped = self.handle_song_change(self.now_playing)
-            # mpd responds twice on a natural new song start
-            going_to_happen_twice = not skipped
-        else:
-            going_to_happen_twice = False
+        if self.now_playing:
+            if self.now_playing['path'] != path:
+                self.handle_song_change(self.now_playing)
+            else:
+                # In case we got mpd play event with same song playing
+                # multiple times,
+                # assume low diff means redundant second play event
+                # after natural song start.
+                diff = abs(time.time() - self.now_playing['started'])
 
-        if not going_to_happen_twice:
-            self._log.info(u'playing {0}', displayable_path(path))
+                if diff <= self.time_threshold:
+                    return
 
-            self.now_playing = {
-                'started':    time.time(),
-                'remaining':  remaining,
-                'path':       path,
-                'beets_item': self.get_item(path),
-            }
+                if self.now_playing['path'] == path and played == 0:
+                    self.handle_song_change(self.now_playing)
 
-            self.update_item(self.now_playing['beets_item'],
-                             'last_played', value=int(time.time()))
+        if is_url(path):
+            self._log.info(u'playing stream {0}', displayable_path(path))
+            self.now_playing = None
+            return
+
+        self._log.info(u'playing {0}', displayable_path(path))
+
+        self.now_playing = {
+            'started':    time.time(),
+            'remaining':  remaining,
+            'path':       path,
+            'beets_item': self.get_item(path),
+        }
+
+        self.update_item(self.now_playing['beets_item'],
+                         'last_played', value=int(time.time()))
 
     def run(self):
         self.mpd.connect()
@@ -332,7 +326,7 @@ class MPDStatsPlugin(plugins.BeetsPlugin):
             'rating':          True,
             'rating_mix':      0.75,
             'host':            os.environ.get('MPD_HOST', u'localhost'),
-            'port':            6600,
+            'port':            int(os.environ.get('MPD_PORT', 6600)),
             'password':        u'',
         })
         mpd_config['password'].redact = True

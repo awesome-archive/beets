@@ -20,19 +20,17 @@ from __future__ import division, absolute_import, print_function
 import os
 import re
 import sys
+import unittest
 
-from test._common import unittest
-
-pkgpath = os.path.dirname(__file__) or '.'
-sys.path.append(pkgpath)
-os.chdir(pkgpath)
+pkgpath = os.path.dirname(os.path.dirname(os.path.realpath(__file__))) or '..'
+sys.path.insert(0, pkgpath)
 
 
 def suite():
     s = unittest.TestSuite()
     # Get the suite() of every module in this directory beginning with
     # "test_".
-    for fname in os.listdir(pkgpath):
+    for fname in os.listdir(os.path.join(pkgpath, 'test')):
         match = re.match(r'(test_\S+)\.py$', fname)
         if match:
             modname = match.group(1)

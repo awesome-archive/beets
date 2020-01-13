@@ -22,19 +22,21 @@ import re
 import shutil
 import unicodedata
 import sys
+import stat
 from six import StringIO
 from tempfile import mkstemp
 from zipfile import ZipFile
 from tarfile import TarFile
 from mock import patch, Mock
+import unittest
 
 from test import _common
-from test._common import unittest
 from beets.util import displayable_path, bytestring_path, py3_path
-from test.helper import TestImportSession, TestHelper, has_program, capture_log
+from test.helper import TestHelper, has_program, capture_log
+from test.helper import ImportSessionFixture
 from beets import importer
 from beets.importer import albums_in_dir
-from beets.mediafile import MediaFile
+from mediafile import MediaFile
 from beets import autotag
 from beets.autotag import AlbumInfo, TrackInfo, AlbumMatch
 from beets import config
@@ -209,7 +211,8 @@ class ImportHelper(TestHelper):
 
     def _setup_import_session(self, import_dir=None, delete=False,
                               threaded=False, copy=True, singletons=False,
-                              move=False, autotag=True, link=False):
+                              move=False, autotag=True, link=False,
+                              hardlink=False):
         config['import']['copy'] = copy
         config['import']['delete'] = delete
         config['import']['timid'] = True
@@ -219,8 +222,9 @@ class ImportHelper(TestHelper):
         config['import']['autotag'] = autotag
         config['import']['resume'] = False
         config['import']['link'] = link
+        config['import']['hardlink'] = hardlink
 
-        self.importer = TestImportSession(
+        self.importer = ImportSessionFixture(
             self.lib, loghandler=None, query=None,
             paths=[import_dir or self.import_dir]
         )
@@ -351,6 +355,24 @@ class NonAutotaggedImportTest(_common.TestCase, ImportHelper):
             self.assert_equal_path(
                 util.bytestring_path(os.readlink(filename)),
                 mediafile.path
+            )
+
+    @unittest.skipUnless(_common.HAVE_HARDLINK, "need hardlinks")
+    def test_import_hardlink_arrives(self):
+        config['import']['hardlink'] = True
+        self.importer.run()
+        for mediafile in self.import_media:
+            filename = os.path.join(
+                self.libdir,
+                b'Tag Artist', b'Tag Album',
+                util.bytestring_path('{0}.mp3'.format(mediafile.title))
+            )
+            self.assertExists(filename)
+            s1 = os.stat(mediafile.path)
+            s2 = os.stat(filename)
+            self.assertTrue(
+                (s1[stat.ST_INO], s1[stat.ST_DEV]) ==
+                (s2[stat.ST_INO], s2[stat.ST_DEV])
             )
 
 
@@ -522,6 +544,38 @@ class ImportSingletonTest(_common.TestCase, ImportHelper):
         self.assertEqual(len(self.lib.items()), 2)
         self.assertEqual(len(self.lib.albums()), 2)
 
+    def test_set_fields(self):
+        genre = u"\U0001F3B7 Jazz"
+        collection = u"To Listen"
+
+        config['import']['set_fields'] = {
+            u'collection': collection,
+            u'genre': genre
+        }
+
+        # As-is item import.
+        self.assertEqual(self.lib.albums().get(), None)
+        self.importer.add_choice(importer.action.ASIS)
+        self.importer.run()
+
+        for item in self.lib.items():
+            item.load()  # TODO: Not sure this is necessary.
+            self.assertEqual(item.genre, genre)
+            self.assertEqual(item.collection, collection)
+            # Remove item from library to test again with APPLY choice.
+            item.remove()
+
+        # Autotagged.
+        self.assertEqual(self.lib.albums().get(), None)
+        self.importer.clear_choices()
+        self.importer.add_choice(importer.action.APPLY)
+        self.importer.run()
+
+        for item in self.lib.items():
+            item.load()
+            self.assertEqual(item.genre, genre)
+            self.assertEqual(item.collection, collection)
+
 
 class ImportTest(_common.TestCase, ImportHelper):
     """Test APPLY, ASIS and SKIP choices.
@@ -579,6 +633,32 @@ class ImportTest(_common.TestCase, ImportHelper):
         self.importer.run()
         self.assert_file_in_lib(
             b'Applied Artist', b'Applied Album', b'Applied Title 1.mp3')
+
+    def test_apply_from_scratch_removes_other_metadata(self):
+        config['import']['from_scratch'] = True
+
+        for mediafile in self.import_media:
+            mediafile.genre = u'Tag Genre'
+            mediafile.save()
+
+        self.importer.add_choice(importer.action.APPLY)
+        self.importer.run()
+        self.assertEqual(self.lib.items().get().genre, u'')
+
+    def test_apply_from_scratch_keeps_format(self):
+        config['import']['from_scratch'] = True
+
+        self.importer.add_choice(importer.action.APPLY)
+        self.importer.run()
+        self.assertEqual(self.lib.items().get().format, u'MP3')
+
+    def test_apply_from_scratch_keeps_bitrate(self):
+        config['import']['from_scratch'] = True
+        bitrate = 80000
+
+        self.importer.add_choice(importer.action.APPLY)
+        self.importer.run()
+        self.assertEqual(self.lib.items().get().bitrate, bitrate)
 
     def test_apply_with_move_deletes_import(self):
         config['import']['move'] = True
@@ -650,6 +730,38 @@ class ImportTest(_common.TestCase, ImportHelper):
 
         with self.assertRaises(AttributeError):
             self.lib.items().get().data_source
+
+    def test_set_fields(self):
+        genre = u"\U0001F3B7 Jazz"
+        collection = u"To Listen"
+
+        config['import']['set_fields'] = {
+            u'collection': collection,
+            u'genre': genre
+        }
+
+        # As-is album import.
+        self.assertEqual(self.lib.albums().get(), None)
+        self.importer.add_choice(importer.action.ASIS)
+        self.importer.run()
+
+        for album in self.lib.albums():
+            album.load()  # TODO: Not sure this is necessary.
+            self.assertEqual(album.genre, genre)
+            self.assertEqual(album.collection, collection)
+            # Remove album from library to test again with APPLY choice.
+            album.remove()
+
+        # Autotagged.
+        self.assertEqual(self.lib.albums().get(), None)
+        self.importer.clear_choices()
+        self.importer.add_choice(importer.action.APPLY)
+        self.importer.run()
+
+        for album in self.lib.albums():
+            album.load()
+            self.assertEqual(album.genre, genre)
+            self.assertEqual(album.collection, collection)
 
 
 class ImportTracksTest(_common.TestCase, ImportHelper):
@@ -1162,6 +1274,12 @@ class ImportDuplicateAlbumTest(unittest.TestCase, TestHelper,
         self.assertEqual(len(self.lib.items()), 1)
         item = self.lib.items().get()
         self.assertEqual(item.title, u't\xeftle 0')
+
+    def test_merge_duplicate_album(self):
+        self.importer.default_resolution = self.importer.Resolution.MERGE
+        self.importer.run()
+
+        self.assertEqual(len(self.lib.albums()), 1)
 
     def test_twice_in_import_dir(self):
         self.skipTest('write me')
@@ -1717,12 +1835,14 @@ def mocked_get_release_by_id(id_, includes=[], release_status=[],
             'id': id_,
             'medium-list': [{
                 'track-list': [{
+                    'id': 'baz',
                     'recording': {
                         'title': 'foo',
                         'id': 'bar',
                         'length': 59,
                     },
                     'position': 9,
+                    'number': 'A2'
                 }],
                 'position': 5,
             }],

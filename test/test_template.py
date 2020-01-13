@@ -17,9 +17,9 @@
 """
 from __future__ import division, absolute_import, print_function
 
-from test._common import unittest
-from beets.util import functemplate
+import unittest
 import six
+from beets.util import functemplate
 
 
 def _normexpr(expr):
@@ -226,6 +226,11 @@ class ParseTest(unittest.TestCase):
         self._assert_symbol(parts[1], u"foo")
         self.assertEqual(parts[2], u',')
         self._assert_symbol(parts[3], u"bar")
+
+    def test_newline_at_end(self):
+        parts = list(_normparse(u'foo\n'))
+        self.assertEqual(len(parts), 1)
+        self.assertEqual(parts[0], u'foo\n')
 
 
 class EvalTest(unittest.TestCase):

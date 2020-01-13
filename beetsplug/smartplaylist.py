@@ -20,7 +20,8 @@ from __future__ import division, absolute_import, print_function
 
 from beets.plugins import BeetsPlugin
 from beets import ui
-from beets.util import mkdirall, normpath, syspath, bytestring_path
+from beets.util import (mkdirall, normpath, sanitize_path, syspath,
+                        bytestring_path, path_as_posix)
 from beets.library import Item, Album, parse_query_string
 from beets.dbcore import OrQuery
 from beets.dbcore.query import MultipleSort, ParsingError
@@ -36,7 +37,8 @@ class SmartPlaylistPlugin(BeetsPlugin):
             'relative_to': None,
             'playlist_dir': u'.',
             'auto': True,
-            'playlists': []
+            'playlists': [],
+            'forward_slash': False,
         })
 
         self._matched_playlists = None
@@ -80,7 +82,7 @@ class SmartPlaylistPlugin(BeetsPlugin):
 
     def build_queries(self):
         """
-        Instanciate queries for the playlists.
+        Instantiate queries for the playlists.
 
         Each playlist has 2 queries: one or items one for albums, each with a
         sort. We must also remember its name. _unmatched_playlists is a set of
@@ -171,6 +173,9 @@ class SmartPlaylistPlugin(BeetsPlugin):
         if relative_to:
             relative_to = normpath(relative_to)
 
+        # Maps playlist filenames to lists of track filenames.
+        m3us = {}
+
         for playlist in self._matched_playlists:
             name, (query, q_sort), (album_query, a_q_sort) = playlist
             self._log.debug(u"Creating playlist {0}", name)
@@ -182,11 +187,11 @@ class SmartPlaylistPlugin(BeetsPlugin):
                 for album in lib.albums(album_query, a_q_sort):
                     items.extend(album.items())
 
-            m3us = {}
             # As we allow tags in the m3u names, we'll need to iterate through
             # the items and generate the correct m3u file names.
             for item in items:
                 m3u_name = item.evaluate_template(name, True)
+                m3u_name = sanitize_path(m3u_name, lib.replacements)
                 if m3u_name not in m3us:
                     m3us[m3u_name] = []
                 item_path = item.path
@@ -194,13 +199,16 @@ class SmartPlaylistPlugin(BeetsPlugin):
                     item_path = os.path.relpath(item.path, relative_to)
                 if item_path not in m3us[m3u_name]:
                     m3us[m3u_name].append(item_path)
-            # Now iterate through the m3us that we need to generate
-            for m3u in m3us:
-                m3u_path = normpath(os.path.join(playlist_dir,
-                                    bytestring_path(m3u)))
-                mkdirall(m3u_path)
-                with open(syspath(m3u_path), 'wb') as f:
-                    for path in m3us[m3u]:
-                        f.write(path + b'\n')
+
+        # Write all of the accumulated track lists to files.
+        for m3u in m3us:
+            m3u_path = normpath(os.path.join(playlist_dir,
+                                bytestring_path(m3u)))
+            mkdirall(m3u_path)
+            with open(syspath(m3u_path), 'wb') as f:
+                for path in m3us[m3u]:
+                    if self.config['forward_slash'].get():
+                        path = path_as_posix(path)
+                    f.write(path + b'\n')
 
         self._log.info(u"{0} playlists updated", len(self._matched_playlists))

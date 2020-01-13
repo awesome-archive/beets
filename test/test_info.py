@@ -15,10 +15,10 @@
 
 from __future__ import division, absolute_import, print_function
 
-from test._common import unittest
+import unittest
 from test.helper import TestHelper
 
-from beets.mediafile import MediaFile
+from mediafile import MediaFile
 from beets.util import displayable_path
 
 

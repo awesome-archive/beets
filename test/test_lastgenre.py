@@ -17,10 +17,10 @@
 
 from __future__ import division, absolute_import, print_function
 
+import unittest
 from mock import Mock
 
 from test import _common
-from test._common import unittest
 from beetsplug import lastgenre
 from beets import config
 
@@ -36,9 +36,11 @@ class LastGenrePluginTest(unittest.TestCase, TestHelper):
     def tearDown(self):
         self.teardown_beets()
 
-    def _setup_config(self, whitelist=False, canonical=False, count=1):
+    def _setup_config(self, whitelist=False, canonical=False, count=1,
+                      prefer_specific=False):
         config['lastgenre']['canonical'] = canonical
         config['lastgenre']['count'] = count
+        config['lastgenre']['prefer_specific'] = prefer_specific
         if isinstance(whitelist, (bool, six.string_types)):
             # Filename, default, or disabled.
             config['lastgenre']['whitelist'] = whitelist
@@ -136,6 +138,21 @@ class LastGenrePluginTest(unittest.TestCase, TestHelper):
         self.assertEqual(self.plugin._resolve_genres(['iota blues']),
                          u'')
 
+    def test_prefer_specific_loads_tree(self):
+        """When prefer_specific is enabled but canonical is not the
+        tree still has to be loaded.
+        """
+        self._setup_config(prefer_specific=True, canonical=False)
+        self.assertNotEqual(self.plugin.c14n_branches, [])
+
+    def test_prefer_specific_without_canonical(self):
+        """Prefer_specific works without canonical.
+        """
+        self._setup_config(prefer_specific=True, canonical=False, count=4)
+        self.assertEqual(self.plugin._resolve_genres(
+                         ['math rock', 'post-rock']),
+                         u'Post-Rock, Math Rock')
+
     def test_no_duplicate(self):
         """Remove duplicated genres.
         """
@@ -212,6 +229,18 @@ class LastGenrePluginTest(unittest.TestCase, TestHelper):
         res = self.plugin._get_genre(item)
         self.assertEqual(res, (config['lastgenre']['fallback'].get(),
                          u'fallback'))
+
+    def test_sort_by_depth(self):
+        self._setup_config(canonical=True)
+        # Normal case.
+        tags = ('electronic', 'ambient', 'post-rock', 'downtempo')
+        res = self.plugin._sort_by_depth(tags)
+        self.assertEqual(
+            res, ['post-rock', 'downtempo', 'ambient', 'electronic'])
+        # Non-canonical tag ('chillout') present.
+        tags = ('electronic', 'ambient', 'chillout')
+        res = self.plugin._sort_by_depth(tags)
+        self.assertEqual(res, ['ambient', 'electronic'])
 
 
 def suite():

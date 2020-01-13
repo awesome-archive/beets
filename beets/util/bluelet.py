@@ -269,7 +269,7 @@ def run(root_coro):
         except StopIteration:
             # Thread is done.
             complete_thread(coro, None)
-        except:
+        except BaseException:
             # Thread raised some other exception.
             del threads[coro]
             raise ThreadException(coro, sys.exc_info())
@@ -346,6 +346,10 @@ def run(root_coro):
                             exc.args[0] == errno.EPIPE:
                         # Broken pipe. Remote host disconnected.
                         pass
+                    elif isinstance(exc.args, tuple) and \
+                            exc.args[0] == errno.ECONNRESET:
+                        # Connection was reset by peer.
+                        pass
                     else:
                         traceback.print_exc()
                     # Abort the coroutine.
@@ -366,7 +370,7 @@ def run(root_coro):
                 exit_te = te
                 break
 
-        except:
+        except BaseException:
             # For instance, KeyboardInterrupt during select(). Raise
             # into root thread and terminate others.
             threads = {root_coro: ExceptionEvent(sys.exc_info())}

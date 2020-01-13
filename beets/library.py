@@ -23,14 +23,15 @@ import unicodedata
 import time
 import re
 import six
-from unidecode import unidecode
+import string
 
 from beets import logging
-from beets.mediafile import MediaFile, UnreadableFileError
+from mediafile import MediaFile, UnreadableFileError
 from beets import plugins
 from beets import util
-from beets.util import bytestring_path, syspath, normpath, samefile
-from beets.util.functemplate import Template
+from beets.util import bytestring_path, syspath, normpath, samefile, \
+    MoveOperation, lazy_property
+from beets.util.functemplate import template, Template
 from beets import dbcore
 from beets.dbcore import types
 import beets
@@ -145,9 +146,26 @@ class DateType(types.Float):
 
 
 class PathType(types.Type):
+    """A dbcore type for filesystem paths. These are represented as
+    `bytes` objects, in keeping with the Unix filesystem abstraction.
+    """
+
     sql = u'BLOB'
     query = PathQuery
     model_type = bytes
+
+    def __init__(self, nullable=False):
+        """Create a path type object. `nullable` controls whether the
+        type may be missing, i.e., None.
+        """
+        self.nullable = nullable
+
+    @property
+    def null(self):
+        if self.nullable:
+            return None
+        else:
+            return b''
 
     def format(self, value):
         return util.displayable_path(value)
@@ -188,6 +206,8 @@ class MusicalKey(types.String):
         r'ab': 'g#',
         r'bb': 'a#',
     }
+
+    null = None
 
     def parse(self, key):
         key = key.lower()
@@ -323,8 +343,8 @@ class LibModel(dbcore.Model):
         funcs.update(plugins.template_funcs())
         return funcs
 
-    def store(self):
-        super(LibModel, self).store()
+    def store(self, fields=None):
+        super(LibModel, self).store(fields)
         plugins.send('database_change', lib=self._db, model=self)
 
     def remove(self):
@@ -356,13 +376,25 @@ class FormattedItemMapping(dbcore.db.FormattedMapping):
 
     def __init__(self, item, for_path=False):
         super(FormattedItemMapping, self).__init__(item, for_path)
-        self.album = item.get_album()
-        self.album_keys = []
+        self.item = item
+
+    @lazy_property
+    def all_keys(self):
+        return set(self.model_keys).union(self.album_keys)
+
+    @lazy_property
+    def album_keys(self):
+        album_keys = []
         if self.album:
             for key in self.album.keys(True):
-                if key in Album.item_keys or key not in item._fields.keys():
-                    self.album_keys.append(key)
-        self.all_keys = set(self.model_keys).union(self.album_keys)
+                if key in Album.item_keys \
+                        or key not in self.item._fields.keys():
+                    album_keys.append(key)
+        return album_keys
+
+    @lazy_property
+    def album(self):
+        return self.item.get_album()
 
     def _get(self, key):
         """Get the value for a key, either from the album or the item.
@@ -416,7 +448,17 @@ class Item(LibModel):
         'albumartist_sort':     types.STRING,
         'albumartist_credit':   types.STRING,
         'genre':                types.STRING,
+        'style':                types.STRING,
+        'discogs_albumid':      types.INTEGER,
+        'discogs_artistid':     types.INTEGER,
+        'discogs_labelid':      types.INTEGER,
+        'lyricist':             types.STRING,
         'composer':             types.STRING,
+        'composer_sort':        types.STRING,
+        'work':                 types.STRING,
+        'mb_workid':            types.STRING,
+        'work_disambig':        types.STRING,
+        'arranger':             types.STRING,
         'grouping':             types.STRING,
         'year':                 types.PaddedInt(4),
         'month':                types.PaddedInt(2),
@@ -433,6 +475,7 @@ class Item(LibModel):
         'mb_albumid':           types.STRING,
         'mb_artistid':          types.STRING,
         'mb_albumartistid':     types.STRING,
+        'mb_releasetrackid':    types.STRING,
         'albumtype':            types.STRING,
         'label':                types.STRING,
         'acoustid_fingerprint': types.STRING,
@@ -446,12 +489,15 @@ class Item(LibModel):
         'albumstatus':          types.STRING,
         'media':                types.STRING,
         'albumdisambig':        types.STRING,
+        'releasegroupdisambig': types.STRING,
         'disctitle':            types.STRING,
         'encoder':              types.STRING,
         'rg_track_gain':        types.NULL_FLOAT,
         'rg_track_peak':        types.NULL_FLOAT,
         'rg_album_gain':        types.NULL_FLOAT,
         'rg_album_peak':        types.NULL_FLOAT,
+        'r128_track_gain':      types.NullPaddedInt(6),
+        'r128_album_gain':      types.NullPaddedInt(6),
         'original_year':        types.PaddedInt(4),
         'original_month':       types.PaddedInt(2),
         'original_day':         types.PaddedInt(2),
@@ -524,10 +570,10 @@ class Item(LibModel):
             elif isinstance(value, BLOB_TYPE):
                 value = bytes(value)
 
-        if key in MediaFile.fields():
-            self.mtime = 0  # Reset mtime on dirty.
+        changed = super(Item, self)._setitem(key, value)
 
-        super(Item, self).__setitem__(key, value)
+        if changed and key in MediaFile.fields():
+            self.mtime = 0  # Reset mtime on dirty.
 
     def update(self, values):
         """Set all key/value pairs in the mapping. If mtime is
@@ -536,6 +582,11 @@ class Item(LibModel):
         super(Item, self).update(values)
         if self.mtime == 0 and 'mtime' in values:
             self.mtime = values['mtime']
+
+    def clear(self):
+        """Set all key/value pairs to None."""
+        for key in self._media_tag_fields:
+            setattr(self, key, None)
 
     def get_album(self):
         """Get the Album object that this item belongs to, if any, or
@@ -579,7 +630,7 @@ class Item(LibModel):
 
         self.path = read_path
 
-    def write(self, path=None, tags=None):
+    def write(self, path=None, tags=None, id3v23=None):
         """Write the item's metadata to a media file.
 
         All fields in `_media_fields` are written to disk according to
@@ -591,12 +642,18 @@ class Item(LibModel):
         `tags` is a dictionary of additional metadata the should be
         written to the file. (These tags need not be in `_media_fields`.)
 
+        `id3v23` will override the global `id3v23` config option if it is
+        set to something other than `None`.
+
         Can raise either a `ReadError` or a `WriteError`.
         """
         if path is None:
             path = self.path
         else:
             path = normpath(path)
+
+        if id3v23 is None:
+            id3v23 = beets.config['id3v23'].get(bool)
 
         # Get the data to write to the file.
         item_tags = dict(self)
@@ -608,10 +665,9 @@ class Item(LibModel):
 
         # Open the file.
         try:
-            mediafile = MediaFile(syspath(path),
-                                  id3v23=beets.config['id3v23'].get(bool))
+            mediafile = MediaFile(syspath(path), id3v23=id3v23)
         except UnreadableFileError as exc:
-            raise ReadError(self.path, exc)
+            raise ReadError(path, exc)
 
         # Write the tags to the file.
         mediafile.update(item_tags)
@@ -625,14 +681,14 @@ class Item(LibModel):
             self.mtime = self.current_mtime()
         plugins.send('after_write', item=self, path=path)
 
-    def try_write(self, path=None, tags=None):
+    def try_write(self, *args, **kwargs):
         """Calls `write()` but catches and logs `FileOperationError`
         exceptions.
 
         Returns `False` an exception was caught and `True` otherwise.
         """
         try:
-            self.write(path, tags)
+            self.write(*args, **kwargs)
             return True
         except FileOperationError as exc:
             log.error(u"{0}", exc)
@@ -662,26 +718,33 @@ class Item(LibModel):
 
     # Files themselves.
 
-    def move_file(self, dest, copy=False, link=False):
-        """Moves or copies the item's file, updating the path value if
-        the move succeeds. If a file exists at ``dest``, then it is
-        slightly modified to be unique.
+    def move_file(self, dest, operation=MoveOperation.MOVE):
+        """Move, copy, link or hardlink the item's depending on `operation`,
+        updating the path value if the move succeeds.
+
+        If a file exists at `dest`, then it is slightly modified to be unique.
+
+        `operation` should be an instance of `util.MoveOperation`.
         """
         if not util.samefile(self.path, dest):
             dest = util.unique_path(dest)
-        if copy:
-            util.copy(self.path, dest)
-            plugins.send("item_copied", item=self, source=self.path,
-                         destination=dest)
-        elif link:
-            util.link(self.path, dest)
-            plugins.send("item_linked", item=self, source=self.path,
-                         destination=dest)
-        else:
+        if operation == MoveOperation.MOVE:
             plugins.send("before_item_moved", item=self, source=self.path,
                          destination=dest)
             util.move(self.path, dest)
             plugins.send("item_moved", item=self, source=self.path,
+                         destination=dest)
+        elif operation == MoveOperation.COPY:
+            util.copy(self.path, dest)
+            plugins.send("item_copied", item=self, source=self.path,
+                         destination=dest)
+        elif operation == MoveOperation.LINK:
+            util.link(self.path, dest)
+            plugins.send("item_linked", item=self, source=self.path,
+                         destination=dest)
+        elif operation == MoveOperation.HARDLINK:
+            util.hardlink(self.path, dest)
+            plugins.send("item_hardlinked", item=self, source=self.path,
                          destination=dest)
 
         # Either copying or moving succeeded, so update the stored path.
@@ -729,26 +792,27 @@ class Item(LibModel):
 
         self._db._memotable = {}
 
-    def move(self, copy=False, link=False, basedir=None, with_album=True):
+    def move(self, operation=MoveOperation.MOVE, basedir=None,
+             with_album=True, store=True):
         """Move the item to its designated location within the library
         directory (provided by destination()). Subdirectories are
         created as needed. If the operation succeeds, the item's path
         field is updated to reflect the new location.
 
-        If `copy` is true, moving the file is copied rather than moved.
-        Similarly, `link` creates a symlink instead.
+        Instead of moving the item it can also be copied, linked or hardlinked
+        depending on `operation` which should be an instance of
+        `util.MoveOperation`.
 
-        basedir overrides the library base directory for the
-        destination.
+        `basedir` overrides the library base directory for the destination.
 
-        If the item is in an album, the album is given an opportunity to
-        move its art. (This can be disabled by passing
-        with_album=False.)
+        If the item is in an album and `with_album` is `True`, the album is
+        given an opportunity to move its art.
 
-        The item is stored to the database if it is in the database, so
-        any dirty fields prior to the move() call will be written as a
-        side effect. You probably want to call save() to commit the DB
-        transaction.
+        By default, the item is stored to the database if it is in the
+        database, so any dirty fields prior to the move() call will be written
+        as a side effect.
+        If `store` is `False` however, the item won't be stored and you'll
+        have to manually store it after invoking this method.
         """
         self._check_db()
         dest = self.destination(basedir=basedir)
@@ -758,18 +822,20 @@ class Item(LibModel):
 
         # Perform the move and store the change.
         old_path = self.path
-        self.move_file(dest, copy, link)
-        self.store()
+        self.move_file(dest, operation)
+        if store:
+            self.store()
 
         # If this item is in an album, move its art.
         if with_album:
             album = self.get_album()
             if album:
-                album.move_art(copy)
-                album.store()
+                album.move_art(operation)
+                if store:
+                    album.store()
 
         # Prune vacated directory.
-        if not copy:
+        if operation == MoveOperation.MOVE:
             util.prune_dirs(os.path.dirname(old_path), self._db.directory)
 
     # Templating.
@@ -808,7 +874,7 @@ class Item(LibModel):
         if isinstance(path_format, Template):
             subpath_tmpl = path_format
         else:
-            subpath_tmpl = Template(path_format)
+            subpath_tmpl = template(path_format)
 
         # Evaluate the selected template.
         subpath = self.evaluate_template(subpath_tmpl, True)
@@ -820,7 +886,10 @@ class Item(LibModel):
             subpath = unicodedata.normalize('NFC', subpath)
 
         if beets.config['asciify_paths']:
-            subpath = unidecode(subpath)
+            subpath = util.asciify_path(
+                subpath,
+                beets.config['path_sep_replace'].as_str()
+            )
 
         maxlen = beets.config['max_filename_length'].get(int)
         if not maxlen:
@@ -857,36 +926,42 @@ class Album(LibModel):
     _always_dirty = True
     _fields = {
         'id':      types.PRIMARY_ID,
-        'artpath': PathType(),
+        'artpath': PathType(True),
         'added':   DateType(),
 
-        'albumartist':        types.STRING,
-        'albumartist_sort':   types.STRING,
-        'albumartist_credit': types.STRING,
-        'album':              types.STRING,
-        'genre':              types.STRING,
-        'year':               types.PaddedInt(4),
-        'month':              types.PaddedInt(2),
-        'day':                types.PaddedInt(2),
-        'disctotal':          types.PaddedInt(2),
-        'comp':               types.BOOLEAN,
-        'mb_albumid':         types.STRING,
-        'mb_albumartistid':   types.STRING,
-        'albumtype':          types.STRING,
-        'label':              types.STRING,
-        'mb_releasegroupid':  types.STRING,
-        'asin':               types.STRING,
-        'catalognum':         types.STRING,
-        'script':             types.STRING,
-        'language':           types.STRING,
-        'country':            types.STRING,
-        'albumstatus':        types.STRING,
-        'albumdisambig':      types.STRING,
-        'rg_album_gain':      types.NULL_FLOAT,
-        'rg_album_peak':      types.NULL_FLOAT,
-        'original_year':      types.PaddedInt(4),
-        'original_month':     types.PaddedInt(2),
-        'original_day':       types.PaddedInt(2),
+        'albumartist':          types.STRING,
+        'albumartist_sort':     types.STRING,
+        'albumartist_credit':   types.STRING,
+        'album':                types.STRING,
+        'genre':                types.STRING,
+        'style':                types.STRING,
+        'discogs_albumid':      types.INTEGER,
+        'discogs_artistid':     types.INTEGER,
+        'discogs_labelid':      types.INTEGER,
+        'year':                 types.PaddedInt(4),
+        'month':                types.PaddedInt(2),
+        'day':                  types.PaddedInt(2),
+        'disctotal':            types.PaddedInt(2),
+        'comp':                 types.BOOLEAN,
+        'mb_albumid':           types.STRING,
+        'mb_albumartistid':     types.STRING,
+        'albumtype':            types.STRING,
+        'label':                types.STRING,
+        'mb_releasegroupid':    types.STRING,
+        'asin':                 types.STRING,
+        'catalognum':           types.STRING,
+        'script':               types.STRING,
+        'language':             types.STRING,
+        'country':              types.STRING,
+        'albumstatus':          types.STRING,
+        'albumdisambig':        types.STRING,
+        'releasegroupdisambig': types.STRING,
+        'rg_album_gain':        types.NULL_FLOAT,
+        'rg_album_peak':        types.NULL_FLOAT,
+        'r128_album_gain':      types.NullPaddedInt(6),
+        'original_year':        types.PaddedInt(4),
+        'original_month':       types.PaddedInt(2),
+        'original_day':         types.PaddedInt(2),
     }
 
     _search_fields = ('album', 'albumartist', 'genre')
@@ -908,6 +983,10 @@ class Album(LibModel):
         'albumartist_credit',
         'album',
         'genre',
+        'style',
+        'discogs_albumid',
+        'discogs_artistid',
+        'discogs_labelid',
         'year',
         'month',
         'day',
@@ -925,8 +1004,10 @@ class Album(LibModel):
         'country',
         'albumstatus',
         'albumdisambig',
+        'releasegroupdisambig',
         'rg_album_gain',
         'rg_album_peak',
+        'r128_album_gain',
         'original_year',
         'original_month',
         'original_day',
@@ -971,12 +1052,21 @@ class Album(LibModel):
             for item in self.items():
                 item.remove(delete, False)
 
-    def move_art(self, copy=False, link=False):
-        """Move or copy any existing album art so that it remains in the
-        same directory as the items.
+    def move_art(self, operation=MoveOperation.MOVE):
+        """Move, copy, link or hardlink (depending on `operation`) any
+        existing album art so that it remains in the same directory as
+        the items.
+
+        `operation` should be an instance of `util.MoveOperation`.
         """
         old_art = self.artpath
         if not old_art:
+            return
+
+        if not os.path.exists(old_art):
+            log.error(u'removing reference to missing album art file {}',
+                      util.displayable_path(old_art))
+            self.artpath = None
             return
 
         new_art = self.art_destination(old_art)
@@ -987,39 +1077,47 @@ class Album(LibModel):
         log.debug(u'moving album art {0} to {1}',
                   util.displayable_path(old_art),
                   util.displayable_path(new_art))
-        if copy:
-            util.copy(old_art, new_art)
-        elif link:
-            util.link(old_art, new_art)
-        else:
+        if operation == MoveOperation.MOVE:
             util.move(old_art, new_art)
+            util.prune_dirs(os.path.dirname(old_art), self._db.directory)
+        elif operation == MoveOperation.COPY:
+            util.copy(old_art, new_art)
+        elif operation == MoveOperation.LINK:
+            util.link(old_art, new_art)
+        elif operation == MoveOperation.HARDLINK:
+            util.hardlink(old_art, new_art)
         self.artpath = new_art
 
-        # Prune old path when moving.
-        if not copy:
-            util.prune_dirs(os.path.dirname(old_art),
-                            self._db.directory)
+    def move(self, operation=MoveOperation.MOVE, basedir=None, store=True):
+        """Move, copy, link or hardlink (depending on `operation`)
+        all items to their destination. Any album art moves along with them.
 
-    def move(self, copy=False, link=False, basedir=None):
-        """Moves (or copies) all items to their destination. Any album
-        art moves along with them. basedir overrides the library base
-        directory for the destination. The album is stored to the
-        database, persisting any modifications to its metadata.
+        `basedir` overrides the library base directory for the destination.
+
+        `operation` should be an instance of `util.MoveOperation`.
+
+        By default, the album is stored to the database, persisting any
+        modifications to its metadata. If `store` is `False` however,
+        the album is not stored automatically, and you'll have to manually
+        store it after invoking this method.
         """
         basedir = basedir or self._db.directory
 
         # Ensure new metadata is available to items for destination
         # computation.
-        self.store()
+        if store:
+            self.store()
 
         # Move items.
         items = list(self.items())
         for item in items:
-            item.move(copy, link, basedir=basedir, with_album=False)
+            item.move(operation, basedir=basedir, with_album=False,
+                      store=store)
 
         # Move art.
-        self.move_art(copy, link)
-        self.store()
+        self.move_art(operation)
+        if store:
+            self.store()
 
     def item_dir(self):
         """Returns the directory containing the album's first item,
@@ -1027,7 +1125,7 @@ class Album(LibModel):
         """
         item = self.items().get()
         if not item:
-            raise ValueError(u'empty album')
+            raise ValueError(u'empty album for album id %d' % self.id)
         return os.path.dirname(item.path)
 
     def _albumtotal(self):
@@ -1063,11 +1161,14 @@ class Album(LibModel):
         image = bytestring_path(image)
         item_dir = item_dir or self.item_dir()
 
-        filename_tmpl = Template(
+        filename_tmpl = template(
             beets.config['art_filename'].as_str())
         subpath = self.evaluate_template(filename_tmpl, True)
         if beets.config['asciify_paths']:
-            subpath = unidecode(subpath)
+            subpath = util.asciify_path(
+                subpath,
+                beets.config['path_sep_replace'].as_str()
+            )
         subpath = util.sanitize_path(subpath,
                                      replacements=self._db.replacements)
         subpath = bytestring_path(subpath)
@@ -1108,9 +1209,11 @@ class Album(LibModel):
 
         plugins.send('art_set', album=self)
 
-    def store(self):
+    def store(self, fields=None):
         """Update the database with the album information. The album's
         tracks are also updated.
+        :param fields: The fields to be stored. If not specified, all fields
+        will be.
         """
         # Get modified track fields.
         track_updates = {}
@@ -1119,7 +1222,7 @@ class Album(LibModel):
                 track_updates[key] = self[key]
 
         with self._db.transaction():
-            super(Album, self).store()
+            super(Album, self).store(fields)
             if track_updates:
                 for item in self.items():
                     for key, value in track_updates.items():
@@ -1163,8 +1266,10 @@ def parse_query_parts(parts, model_cls):
         else:
             non_path_parts.append(s)
 
+    case_insensitive = beets.config['sort_case_insensitive'].get(bool)
+
     query, sort = dbcore.parse_sorted_query(
-        model_cls, non_path_parts, prefixes
+        model_cls, non_path_parts, prefixes, case_insensitive
     )
 
     # Add path queries to aggregate query.
@@ -1219,13 +1324,16 @@ class Library(dbcore.Database):
         timeout = beets.config['timeout'].as_number()
         super(Library, self).__init__(path, timeout=timeout)
 
-        self._connection().create_function('bytelower', 1, _sqlite_bytelower)
-
         self.directory = bytestring_path(normpath(directory))
         self.path_formats = path_formats
         self.replacements = replacements
 
         self._memotable = {}  # Used for template substitution performance.
+
+    def _create_connection(self):
+        conn = super(Library, self)._create_connection()
+        conn.create_function('bytelower', 1, _sqlite_bytelower)
+        return conn
 
     # Adding objects to the database.
 
@@ -1277,7 +1385,7 @@ class Library(dbcore.Database):
                 query, parsed_sort = parse_query_string(query, model_cls)
             elif isinstance(query, (list, tuple)):
                 query, parsed_sort = parse_query_parts(query, model_cls)
-        except dbcore.query.InvalidQueryArgumentTypeError as exc:
+        except dbcore.query.InvalidQueryArgumentValueError as exc:
             raise dbcore.InvalidQueryError(query, exc)
 
         # Any non-null sort specified by the parsed query overrides the
@@ -1383,7 +1491,7 @@ class DefaultTemplateFunctions(object):
     @staticmethod
     def tmpl_title(s):
         """Convert a string to title case."""
-        return s.title()
+        return string.capwords(s)
 
     @staticmethod
     def tmpl_left(s, chars):
@@ -1417,7 +1525,7 @@ class DefaultTemplateFunctions(object):
     def tmpl_asciify(s):
         """Translate non-ASCII characters to their ASCII equivalents.
         """
-        return unidecode(s)
+        return util.asciify_path(s, beets.config['path_sep_replace'].as_str())
 
     @staticmethod
     def tmpl_time(s, fmt):
@@ -1426,30 +1534,49 @@ class DefaultTemplateFunctions(object):
         cur_fmt = beets.config['time_format'].as_str()
         return time.strftime(fmt, time.strptime(s, cur_fmt))
 
-    def tmpl_aunique(self, keys=None, disam=None):
+    def tmpl_aunique(self, keys=None, disam=None, bracket=None):
         """Generate a string that is guaranteed to be unique among all
         albums in the library who share the same set of keys. A fields
         from "disam" is used in the string if one is sufficient to
         disambiguate the albums. Otherwise, a fallback opaque value is
         used. Both "keys" and "disam" should be given as
-        whitespace-separated lists of field names.
+        whitespace-separated lists of field names, while "bracket" is a
+        pair of characters to be used as brackets surrounding the
+        disambiguator or empty to have no brackets.
         """
         # Fast paths: no album, no item or library, or memoized value.
         if not self.item or not self.lib:
             return u''
-        if self.item.album_id is None:
+
+        if isinstance(self.item, Item):
+            album_id = self.item.album_id
+        elif isinstance(self.item, Album):
+            album_id = self.item.id
+
+        if album_id is None:
             return u''
-        memokey = ('aunique', keys, disam, self.item.album_id)
+
+        memokey = ('aunique', keys, disam, album_id)
         memoval = self.lib._memotable.get(memokey)
         if memoval is not None:
             return memoval
 
-        keys = keys or 'albumartist album'
-        disam = disam or 'albumtype year label catalognum albumdisambig'
+        keys = keys or beets.config['aunique']['keys'].as_str()
+        disam = disam or beets.config['aunique']['disambiguators'].as_str()
+        if bracket is None:
+            bracket = beets.config['aunique']['bracket'].as_str()
         keys = keys.split()
         disam = disam.split()
 
-        album = self.lib.get_album(self.item)
+        # Assign a left and right bracket or leave blank if argument is empty.
+        if len(bracket) == 2:
+            bracket_l = bracket[0]
+            bracket_r = bracket[1]
+        else:
+            bracket_l = u''
+            bracket_r = u''
+
+        album = self.lib.get_album(album_id)
         if not album:
             # Do nothing for singletons.
             self.lib._memotable[memokey] = u''
@@ -1481,13 +1608,19 @@ class DefaultTemplateFunctions(object):
 
         else:
             # No disambiguator distinguished all fields.
-            res = u' {0}'.format(album.id)
+            res = u' {1}{0}{2}'.format(album.id, bracket_l, bracket_r)
             self.lib._memotable[memokey] = res
             return res
 
         # Flatten disambiguation value into a string.
         disam_value = album.formatted(True).get(disambiguator)
-        res = u' [{0}]'.format(disam_value)
+
+        # Return empty string if disambiguator is empty.
+        if disam_value:
+            res = u' {1}{0}{2}'.format(disam_value, bracket_l, bracket_r)
+        else:
+            res = u''
+
         self.lib._memotable[memokey] = res
         return res
 

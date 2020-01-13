@@ -25,17 +25,16 @@ import re
 import unicodedata
 import sys
 import time
+import unittest
 
 from test import _common
-from test._common import unittest
 from test._common import item
 import beets.library
-import beets.mediafile
 import beets.dbcore.query
 from beets import util
 from beets import plugins
 from beets import config
-from beets.mediafile import MediaFile
+from mediafile import MediaFile, UnreadableFileError
 from beets.util import syspath, bytestring_path
 from test.helper import TestHelper
 import six
@@ -158,7 +157,7 @@ class DestinationTest(_common.TestCase):
         self.lib.path_formats = [(u'default', u'two')]
         self.assertEqual(self.i.destination(), np('one/two'))
 
-    def test_destination_substitues_metadata_values(self):
+    def test_destination_substitutes_metadata_values(self):
         self.lib.directory = b'base'
         self.lib.path_formats = [(u'default', u'$album/$artist $title')]
         self.i.title = 'three'
@@ -422,6 +421,13 @@ class DestinationTest(_common.TestCase):
         self.i.title = u'\u201c\u00f6\u2014\u00cf\u201d'
         self.assertEqual(self.i.destination(), np('lib/qo--Iq'))
 
+    def test_asciify_character_expanding_to_slash(self):
+        config['asciify_paths'] = True
+        self.lib.directory = b'lib'
+        self.lib.path_formats = [(u'default', u'$title')]
+        self.i.title = u'ab\xa2\xbdd'
+        self.assertEqual(self.i.destination(), np('lib/abC_ 1_2 d'))
+
     def test_destination_with_replacements(self):
         self.lib.directory = b'base'
         self.lib.replacements = [(re.compile(r'a'), u'e')]
@@ -582,6 +588,14 @@ class DestinationFunctionTest(_common.TestCase, PathFormattingMixin):
         self._setf(u'%title{$title}')
         self._assert_dest(b'/base/The Title')
 
+    def test_title_case_variable_aphostrophe(self):
+        self._setf(u'%title{I can\'t}')
+        self._assert_dest(b'/base/I Can\'t')
+
+    def test_asciify_variable(self):
+        self._setf(u'%asciify{ab\xa2\xbdd}')
+        self._assert_dest(b'/base/abC_ 1_2 d')
+
     def test_left_variable(self):
         self._setf(u'%left{$title, 3}')
         self._assert_dest(b'/base/the')
@@ -702,8 +716,8 @@ class DisambiguationTest(_common.TestCase, PathFormattingMixin):
         album2.year = 2001
         album2.store()
 
-        self._assert_dest(b'/base/foo 1/the title', self.i1)
-        self._assert_dest(b'/base/foo 2/the title', self.i2)
+        self._assert_dest(b'/base/foo [1]/the title', self.i1)
+        self._assert_dest(b'/base/foo [2]/the title', self.i2)
 
     def test_unique_falls_back_to_second_distinguishing_field(self):
         self._setf(u'foo%aunique{albumartist album,month year}/$title')
@@ -718,6 +732,24 @@ class DisambiguationTest(_common.TestCase, PathFormattingMixin):
         album1.store()
         self._setf(u'foo%aunique{albumartist album,albumtype}/$title')
         self._assert_dest(b'/base/foo [foo_bar]/the title', self.i1)
+
+    def test_drop_empty_disambig_string(self):
+        album1 = self.lib.get_album(self.i1)
+        album1.albumdisambig = None
+        album2 = self.lib.get_album(self.i2)
+        album2.albumdisambig = u'foo'
+        album1.store()
+        album2.store()
+        self._setf(u'foo%aunique{albumartist album,albumdisambig}/$title')
+        self._assert_dest(b'/base/foo/the title', self.i1)
+
+    def test_change_brackets(self):
+        self._setf(u'foo%aunique{albumartist album,year,()}/$title')
+        self._assert_dest(b'/base/foo (2001)/the title', self.i1)
+
+    def test_remove_brackets(self):
+        self._setf(u'foo%aunique{albumartist album,year,}/$title')
+        self._assert_dest(b'/base/foo 2001/the title', self.i1)
 
 
 class PluginDestinationTest(_common.TestCase):
@@ -1104,18 +1136,20 @@ class WriteTest(unittest.TestCase, TestHelper):
         shutil.copy(syspath(item.path), syspath(custom_path))
 
         item['artist'] = 'new artist'
-        self.assertNotEqual(MediaFile(custom_path).artist, 'new artist')
-        self.assertNotEqual(MediaFile(item.path).artist, 'new artist')
+        self.assertNotEqual(MediaFile(syspath(custom_path)).artist,
+                            'new artist')
+        self.assertNotEqual(MediaFile(syspath(item.path)).artist,
+                            'new artist')
 
         item.write(custom_path)
-        self.assertEqual(MediaFile(custom_path).artist, 'new artist')
-        self.assertNotEqual(MediaFile(item.path).artist, 'new artist')
+        self.assertEqual(MediaFile(syspath(custom_path)).artist, 'new artist')
+        self.assertNotEqual(MediaFile(syspath(item.path)).artist, 'new artist')
 
     def test_write_custom_tags(self):
         item = self.add_item_fixture(artist='old artist')
         item.write(tags={'artist': 'new artist'})
         self.assertNotEqual(item.artist, 'new artist')
-        self.assertEqual(MediaFile(item.path).artist, 'new artist')
+        self.assertEqual(MediaFile(syspath(item.path)).artist, 'new artist')
 
     def test_write_date_field(self):
         # Since `date` is not a MediaField, this should do nothing.
@@ -1123,7 +1157,7 @@ class WriteTest(unittest.TestCase, TestHelper):
         clean_year = item.year
         item.date = u'foo'
         item.write()
-        self.assertEqual(MediaFile(item.path).year, clean_year)
+        self.assertEqual(MediaFile(syspath(item.path)).year, clean_year)
 
 
 class ItemReadTest(unittest.TestCase):
@@ -1134,7 +1168,7 @@ class ItemReadTest(unittest.TestCase):
         with self.assertRaises(beets.library.ReadError) as cm:
             item.read(unreadable)
         self.assertIsInstance(cm.exception.reason,
-                              beets.mediafile.UnreadableFileError)
+                              UnreadableFileError)
 
     def test_nonexistent_raise_read_error(self):
         item = beets.library.Item()

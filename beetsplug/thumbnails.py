@@ -160,7 +160,7 @@ class ThumbnailsPlugin(BeetsPlugin):
 
     def thumbnail_file_name(self, path):
         """Compute the thumbnail file name
-        See http://standards.freedesktop.org/thumbnail-spec/latest/x227.html
+        See https://standards.freedesktop.org/thumbnail-spec/latest/x227.html
         """
         uri = self.get_uri(path)
         hash = md5(uri.encode('utf-8')).hexdigest()
@@ -168,7 +168,7 @@ class ThumbnailsPlugin(BeetsPlugin):
 
     def add_tags(self, album, image_path):
         """Write required metadata to the thumbnail
-        See http://standards.freedesktop.org/thumbnail-spec/latest/x142.html
+        See https://standards.freedesktop.org/thumbnail-spec/latest/x142.html
         """
         mtime = os.stat(album.artpath).st_mtime
         metadata = {"Thumb::URI": self.get_uri(album.artpath),
@@ -274,8 +274,6 @@ class GioURI(URIGetter):
 
         try:
             uri_ptr = self.libgio.g_file_get_uri(g_file_ptr)
-        except:
-            raise
         finally:
             self.libgio.g_object_unref(g_file_ptr)
         if not uri_ptr:
@@ -285,8 +283,12 @@ class GioURI(URIGetter):
 
         try:
             uri = copy_c_string(uri_ptr)
-        except:
-            raise
         finally:
             self.libgio.g_free(uri_ptr)
-        return uri
+
+        try:
+            return uri.decode(util._fsencoding())
+        except UnicodeDecodeError:
+            raise RuntimeError(
+                "Could not decode filename from GIO: {!r}".format(uri)
+            )

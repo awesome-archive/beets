@@ -44,7 +44,7 @@ beetsplug.__path__ = [os.path.abspath(
 RSRC = util.bytestring_path(os.path.join(os.path.dirname(__file__), 'rsrc'))
 PLUGINPATH = os.path.join(os.path.dirname(__file__), 'rsrc', 'beetsplug')
 
-# Propagate to root loger so nosetest can capture it
+# Propagate to root logger so nosetest can capture it
 log = logging.getLogger('beets')
 log.propagate = True
 log.setLevel(logging.DEBUG)
@@ -54,6 +54,7 @@ _item_ident = 0
 
 # OS feature test.
 HAVE_SYMLINK = sys.platform != 'win32'
+HAVE_HARDLINK = sys.platform != 'win32'
 
 
 def item(lib=None):
@@ -65,8 +66,13 @@ def item(lib=None):
         albumartist=u'the album artist',
         album=u'the album',
         genre=u'the genre',
+        lyricist=u'the lyricist',
         composer=u'the composer',
+        arranger=u'the arranger',
         grouping=u'the grouping',
+        work=u'the work title',
+        mb_workid=u'the work musicbrainz id',
+        work_disambig=u'the work disambiguation',
         year=1,
         month=2,
         day=3,
@@ -86,7 +92,9 @@ def item(lib=None):
         mb_albumid='someID-2',
         mb_artistid='someID-3',
         mb_albumartistid='someID-4',
+        mb_releasetrackid='someID-5',
         album_id=None,
+        mtime=12345,
     )
     if lib:
         lib.add(i)
@@ -167,8 +175,7 @@ class TestCase(unittest.TestCase, Assertions):
         beets.config['directory'] = \
             util.py3_path(os.path.join(self.temp_dir, b'libdir'))
 
-        # Set $HOME, which is used by confit's `config_dir()` to create
-        # directories.
+        # Set $HOME, which is used by Confuse to create directories.
         self._old_home = os.environ.get('HOME')
         os.environ['HOME'] = util.py3_path(self.temp_dir)
 
@@ -279,6 +286,9 @@ class DummyIn(object):
         else:
             self.buf.append(s + '\n')
 
+    def close(self):
+        pass
+
     def readline(self):
         if not self.buf:
             if self.out:
@@ -331,6 +341,29 @@ class Bag(object):
 
     def __getattr__(self, key):
         return self.fields.get(key)
+
+
+# Convenience methods for setting up a temporary sandbox directory for tests
+# that need to interact with the filesystem.
+
+class TempDirMixin(object):
+    """Text mixin for creating and deleting a temporary directory.
+    """
+
+    def create_temp_dir(self):
+        """Create a temporary directory and assign it into `self.temp_dir`.
+        Call `remove_temp_dir` later to delete it.
+        """
+        path = tempfile.mkdtemp()
+        if not isinstance(path, bytes):
+            path = path.encode('utf8')
+        self.temp_dir = path
+
+    def remove_temp_dir(self):
+        """Delete the temporary directory created by `create_temp_dir`.
+        """
+        if os.path.isdir(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
 
 
 # Platform mocking.

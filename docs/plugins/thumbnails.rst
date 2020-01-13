@@ -1,19 +1,19 @@
 Thumbnails Plugin
 ==================
 
-The ``thumbnails`` plugin creates thumbnails your for album folders with the
+The ``thumbnails`` plugin creates thumbnails for your album folders with the
 album cover. This works on freedesktop.org-compliant file managers such as
 Nautilus or Thunar, and is therefore POSIX-only.
 
 To use the ``thumbnails`` plugin, enable it (see :doc:`/plugins/index`) as well
 as the :doc:`/plugins/fetchart`.  You'll need 2 additional python packages:
-`pyxdg` and `pathlib`.
+:pypi:`pyxdg` and :pypi:`pathlib`.
 
 ``thumbnails`` needs to resize the covers, and therefore requires either
 `ImageMagick`_ or `Pillow`_.
 
 .. _Pillow: https://github.com/python-pillow/Pillow
-.. _ImageMagick: http://www.imagemagick.org/
+.. _ImageMagick: https://www.imagemagick.org/
 
 Configuration
 -------------

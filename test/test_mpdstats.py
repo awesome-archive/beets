@@ -15,8 +15,8 @@
 
 from __future__ import division, absolute_import, print_function
 
+import unittest
 from mock import Mock, patch, call, ANY
-from test._common import unittest
 from test.helper import TestHelper
 
 from beets.library import Item
@@ -65,7 +65,7 @@ class MPDStatsTest(unittest.TestCase, TestHelper):
 
     @patch("beetsplug.mpdstats.MPDClientWrapper", return_value=Mock(**{
         "events.side_effect": EVENTS, "status.side_effect": STATUSES,
-        "playlist.return_value": {1: item_path}}))
+        "currentsong.return_value": item_path}))
     def test_run_mpdstats(self, mpd_mock):
         item = Item(title=u'title', path=self.item_path, id=1)
         item.add(self.lib)

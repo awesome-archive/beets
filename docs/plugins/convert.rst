@@ -14,7 +14,7 @@ To use the ``convert`` plugin, first enable it in your configuration (see
 :ref:`using-plugins`). By default, the plugin depends on `FFmpeg`_ to
 transcode the audio, so you might want to install it.
 
-.. _FFmpeg: http://ffmpeg.org
+.. _FFmpeg: https://ffmpeg.org
 
 
 Usage
@@ -24,7 +24,9 @@ To convert a part of your collection, run ``beet convert QUERY``. The
 command will transcode all the files matching the query to the
 destination directory given by the ``-d`` (``--dest``) option or the
 ``dest`` configuration. The path layout mirrors that of your library,
-but it may be customized through the ``paths`` configuration.
+but it may be customized through the ``paths`` configuration. Files
+that have been previously converted---and thus already exist in the
+destination directory---will be skipped.
 
 The plugin uses a command-line program to transcode the audio. With the
 ``-f`` (``--format``) option you can choose the transcoding command
@@ -45,6 +47,12 @@ the destination directory and keep converted files in your library, use the
 To test your configuration without taking any actions, use the ``--pretend``
 flag. The plugin will print out the commands it will run instead of executing
 them.
+
+By default, files that do not need to be transcoded will be copied to their
+destination. Passing the ``-l`` (``--link``) flag creates symbolic links
+instead, passing ``-H`` (``--hardlink``) creates hard links.
+Note that album art embedding is disabled for files that are linked.
+Refer to the ``link`` and ``hardlink`` options below.
 
 
 Configuration
@@ -68,11 +76,16 @@ file. The available options are:
 - **dest**: The directory where the files will be converted (or copied) to.
   Default: none.
 - **embed**: Embed album art in converted items. Default: ``yes``.
+- **id3v23**: Can be used to override the global ``id3v23`` option. Default:
+  ``inherit``.
 - **max_bitrate**: All lossy files with a higher bitrate will be
   transcoded and those with a lower bitrate will simply be copied. Note that
   this does not guarantee that all converted files will have a lower
   bitrate---that depends on the encoder and its configuration.
   Default: none.
+- **no_convert**: Does not transcode items matching provided query string
+  (see :doc:`/reference/query`). (i.e. ``format:AAC, format:WMA`` or
+  ``path::\.(m4a|wma)$``)
 - **never_convert_lossy_files**: Cross-conversions between lossy codecs---such
   as mp3, ogg vorbis, etc.---makes little sense as they will decrease quality
   even further. If set to ``yes``, lossy files are always copied.
@@ -86,8 +99,27 @@ file. The available options are:
 - **threads**: The number of threads to use for parallel encoding.
   By default, the plugin will detect the number of processors available and use
   them all.
+- **link**: By default, files that do not need to be transcoded will be copied
+  to their destination. This option creates symbolic links instead. Note that
+  options such as ``embed`` that modify the output files after the transcoding
+  step will cause the original files to be modified as well if ``link`` is
+  enabled. For this reason, album-art embedding is disabled
+  for files that are linked.
+  Default: ``false``.
+- **hardlink**: This options works similar to ``link``, but it creates
+  hard links instead of symlinks.
+  This option overrides ``link``. Only works when converting to a directory
+  on the same filesystem as the library.
+  Default: ``false``.
 
-You can also configure the format to use for transcoding.
+You can also configure the format to use for transcoding (see the next
+section):
+
+- **format**: The name of the format to transcode to when none is specified on
+  the command line.
+  Default: ``mp3``.
+- **formats**: A set of formats and associated command lines for transcoding
+  each.
 
 .. _convert-format-config:
 
@@ -110,7 +142,7 @@ and select a command with the ``--format`` command-line option or the
 
 In this example ``beet convert`` will use the *speex* command by
 default. To convert the audio to `wav`, run ``beet convert -f wav``.
-This will also use the format key (`wav`) as the file extension.
+This will also use the format key (``wav``) as the file extension.
 
 Each entry in the ``formats`` map consists of a key (the name of the
 format) as well as the command and optionally the file extension.
@@ -133,3 +165,31 @@ and the given command is used for all conversions.
     convert:
         command: ffmpeg -i $source -y -vn -aq 2 $dest
         extension: mp3
+
+
+Gapless MP3 encoding
+````````````````````
+
+While FFmpeg cannot produce "`gapless`_" MP3s by itself, you can create them
+by using `LAME`_ directly. Use a shell script like this to pipe the output of
+FFmpeg into the LAME tool::
+
+    #!/bin/sh
+    ffmpeg -i "$1" -f wav - | lame -V 2 --noreplaygain - "$2"
+
+Then configure the ``convert`` plugin to use the script::
+
+    convert:
+        command: /path/to/script.sh $source $dest
+        extension: mp3
+
+This strategy configures FFmpeg to produce a WAV file with an accurate length
+header for LAME to use. Using ``--noreplaygain`` disables gain analysis; you
+can use the :doc:`/plugins/replaygain` to do this analysis. See the LAME
+`documentation`_ and the `HydrogenAudio wiki`_ for other LAME configuration
+options and a thorough discussion of MP3 encoding.
+
+.. _documentation: http://lame.sourceforge.net/using.php
+.. _HydrogenAudio wiki: https://wiki.hydrogenaud.io/index.php?title=LAME
+.. _gapless: https://wiki.hydrogenaud.io/index.php?title=Gapless_playback
+.. _LAME: https://lame.sourceforge.net/

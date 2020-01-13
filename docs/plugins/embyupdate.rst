@@ -3,7 +3,7 @@ EmbyUpdate Plugin
 
 ``embyupdate`` is a plugin that lets you automatically update `Emby`_'s library whenever you change your beets library.
 
-To use ``embyupdate`` plugin, enable it in your configuration (see :ref:`using-plugins`). Then, you'll probably want to configure the specifics of your Emby server. You can do that using an ``emby:`` section in your ``config.yaml``, which looks like this::
+To use ``embyupdate`` plugin, enable it in your configuration (see :ref:`using-plugins`). Then, you'll want to configure the specifics of your Emby server. You can do that using an ``emby:`` section in your ``config.yaml``, which looks like this::
 
     emby:
         host: localhost
@@ -17,8 +17,8 @@ To use the ``embyupdate`` plugin you need to install the `requests`_ library wit
 
 With that all in place, you'll see beets send the "update" command to your Emby server every time you change your beets library.
 
-.. _Emby: http://emby.media/
-.. _requests: http://docs.python-requests.org/en/latest/
+.. _Emby: https://emby.media/
+.. _requests: https://docs.python-requests.org/en/latest/
 
 Configuration
 -------------
@@ -34,5 +34,5 @@ The available options under the ``emby:`` section are:
 - **password**: The password for the user. (This is only necessary if no API
   key is provided.)
 
-You can choose to authenticate either with `apikey` or `password`, but only
+You can choose to authenticate either with ``apikey`` or ``password``, but only
 one of those two is required.

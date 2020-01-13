@@ -7,12 +7,13 @@ import sys
 import threading
 import logging as log
 from six import StringIO
+import unittest
 
 import beets.logging as blog
 from beets import plugins, ui
 import beetsplug
 from test import _common
-from test._common import unittest, TestCase
+from test._common import TestCase
 from test import helper
 import six
 
@@ -256,7 +257,7 @@ class ConcurrentEventsTest(TestCase, helper.TestHelper):
             t2.join(.1)
             self.assertFalse(t2.is_alive())
 
-        except:
+        except Exception:
             print(u"Alive threads:", threading.enumerate())
             if dp.lock1.locked():
                 print(u"Releasing lock1 after exception in test")

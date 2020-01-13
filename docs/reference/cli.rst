@@ -71,8 +71,9 @@ box. To extract `rar` files, install the `rarfile`_ package and the
 
 Optional command flags:
 
-* By default, the command copies files your the library directory and
-  updates the ID3 tags on your music. If you'd like to leave your music
+* By default, the command copies files to your library directory and
+  updates the ID3 tags on your music. In order to move the files, instead of
+  copying, use the ``-m`` (move) option. If you'd like to leave your music
   files untouched, try the ``-C`` (don't copy) and ``-W`` (don't write tags)
   options. You can also disable this behavior by default in the
   configuration file (below).
@@ -110,6 +111,12 @@ Optional command flags:
   time, when no subdirectories will be skipped. So consider enabling the
   ``incremental`` configuration option.
 
+* When beets applies metadata to your music, it will retain the value of any
+  existing tags that weren't overwritten, and import them into the database. You
+  may prefer to only use existing metadata for finding matches, and to erase it
+  completely when new metadata is applied. You can enforce this behavior with
+  the ``--from-scratch`` option, or the ``from_scratch`` configuration option.
+
 * By default, beets will proceed without asking if it finds a very close
   metadata match. To disable this and have the importer ask you every time,
   use the ``-t`` (for *timid*) option.
@@ -136,6 +143,13 @@ Optional command flags:
   imported, you can instruct beets to restrict the search to that ID instead of
   searching for other candidates by using the ``--search-id SEARCH_ID`` option.
   Multiple IDs can be specified by simply repeating the option several times.
+
+* You can supply ``--set field=value`` to assign `field` to `value` on import.
+  These assignments will merge with (and possibly override) the
+  :ref:`set_fields` configuration dictionary. You can use the option multiple
+  times on the command line, like so::
+
+    beet import --set genre="Alternative Rock" --set mood="emotional"
 
 .. _rarfile: https://pypi.python.org/pypi/rarfile/2.2
 
@@ -203,7 +217,7 @@ beatles`` prints out the number of tracks on each Beatles album. In Unix shells,
 remember to enclose the template argument in single quotes to avoid environment
 variable expansion.
 
-.. _xargs: http://en.wikipedia.org/wiki/Xargs
+.. _xargs: https://en.wikipedia.org/wiki/Xargs
 
 .. _remove-cmd:
 
@@ -227,7 +241,7 @@ modify
 ``````
 ::
 
-    beet modify [-MWay] QUERY [FIELD=VALUE...] [FIELD!...]
+    beet modify [-MWay] [-f FORMAT] QUERY [FIELD=VALUE...] [FIELD!...]
 
 Change the metadata for items or albums in the database.
 
@@ -237,13 +251,28 @@ artist="Tom Tom Club"`` will change the artist for the track "Genius of Love."
 To remove fields (which is only possible for flexible attributes), follow a
 field name with an exclamation point: ``field!``.
 
-The ``-a`` switch operates on albums instead of
-individual tracks. Items will automatically be moved around when necessary if
-they're in your library directory, but you can disable that with ``-M``. Tags
-will be written to the files according to the settings you have for imports,
-but these can be overridden with ``-w`` (write tags, the default) and ``-W``
-(don't write tags).  Finally, this command politely asks for your permission
-before making any changes, but you can skip that prompt with the ``-y`` switch.
+The ``-a`` switch operates on albums instead of individual tracks. Without
+this flag, the command will only change *track-level* data, even if all the
+tracks belong to the same album. If you want to change an *album-level* field,
+such as ``year`` or ``albumartist``, you'll want to use the ``-a`` flag to
+avoid a confusing situation where the data for individual tracks conflicts
+with the data for the whole album.
+
+Items will automatically be moved around when necessary if they're in your
+library directory, but you can disable that with  ``-M``. Tags will be written
+to the files according to the settings you have for imports, but these can be
+overridden with ``-w`` (write tags, the default) and ``-W`` (don't write
+tags).
+
+When you run the ``modify`` command, it prints a list of all
+affected items in the library and asks for your permission before making any
+changes. You can then choose to abort the change (type `n`), confirm
+(`y`), or interactively choose some of the items (`s`). In the latter case,
+the command will prompt you for every matching item or album and invite you to
+type `y` to apply the changes, `n` to discard them or `q` to exit and apply
+the selected changes. This option lets you choose precisely which data to
+change without spending too much time to carefully craft a query. To skip the
+prompts entirely, use the ``-y`` option.
 
 .. _move-cmd:
 
@@ -260,6 +289,7 @@ query are renamed into your library directory structure. By specifying a
 destination directory with ``-d`` manually, you can move items matching a query
 anywhere in your filesystem. The ``-c`` option copies files instead of moving
 them. As with other commands, the ``-a`` option matches albums instead of items.
+The ``-e`` flag (for "export") copies files without changing the database.
 
 To perform a "dry run", just use the ``-p`` (for "pretend") flag. This will
 show you a list of files that would be moved but won't actually change anything
@@ -272,7 +302,7 @@ update
 ``````
 ::
 
-    beet update [-aM] QUERY
+    beet update [-F] FIELD [-aM] QUERY
 
 Update the library (and, optionally, move files) to reflect out-of-band metadata
 changes and file deletions.
@@ -287,6 +317,11 @@ edited.
 To perform a "dry run" of an update, just use the ``-p`` (for "pretend") flag.
 This will show you all the proposed changes but won't actually change anything
 on disk.
+
+By default, all the changed metadata will be populated back to the database.
+If you only want certain fields to be written, specify them with the ```-F```
+flags (which can be used multiple times). For the list of supported fields,
+please see ```beet fields```.
 
 When an updated track is part of an album, the album-level fields of *all*
 tracks from the album are also updated. (Specifically, the command copies
@@ -318,7 +353,7 @@ You can think of this command as the opposite of :ref:`update-cmd`.
 
 The ``-p`` option previews metadata changes without actually applying them.
 
-The ``-f`` option forces a write to the file, even if the file tags match the database. This is useful for making sure that enabled plugins that run on write (e.g., the Scrub and Zero plugins) are run on the file. 
+The ``-f`` option forces a write to the file, even if the file tags match the database. This is useful for making sure that enabled plugins that run on write (e.g., the Scrub and Zero plugins) are run on the file.
 
 
 
@@ -389,7 +424,11 @@ import ...``.
 * ``-v``: verbose mode; prints out a deluge of debugging information. Please use
   this flag when reporting bugs. You can use it twice, as in ``-vv``, to make
   beets even more verbose.
-* ``-c FILE``: read a specified YAML :doc:`configuration file <config>`.
+* ``-c FILE``: read a specified YAML :doc:`configuration file <config>`. This
+  configuration works as an overlay: rather than replacing your normal
+  configuration options entirely, the two are merged. Any individual options set
+  in this config file will override the corresponding settings in your base
+  configuration.
 
 Beets also uses the ``BEETSDIR`` environment variable to look for
 configuration and data.
@@ -414,7 +453,7 @@ available via your package manager. On OS X, you can install it via Homebrew
 with ``brew install bash-completion``; Homebrew will give you instructions for
 sourcing the script.
 
-.. _bash-completion: http://bash-completion.alioth.debian.org/
+.. _bash-completion: https://github.com/scop/bash-completion
 .. _bash: https://www.gnu.org/software/bash/
 
 The completion script suggests names of subcommands and (after typing
@@ -459,6 +498,6 @@ defines some bash-specific functions to make this work without errors::
     See Also
     --------
 
-    ``http://beets.readthedocs.org/``
+    ``https://beets.readthedocs.org/``
 
     :manpage:`beetsconfig(5)`

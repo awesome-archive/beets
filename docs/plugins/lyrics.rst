@@ -2,13 +2,12 @@ Lyrics Plugin
 =============
 
 The ``lyrics`` plugin fetches and stores song lyrics from databases on the Web.
-Namely, the current version of the plugin uses `Lyric Wiki`_, `Lyrics.com`_,
+Namely, the current version of the plugin uses `Lyric Wiki`_,
 `Musixmatch`_, `Genius.com`_, and, optionally, the Google custom search API.
 
-.. _Lyric Wiki: http://lyrics.wikia.com/
-.. _Lyrics.com: http://www.lyrics.com/
+.. _Lyric Wiki: https://lyrics.wikia.com/
 .. _Musixmatch: https://www.musixmatch.com/
-.. _Genius.com: http://genius.com/
+.. _Genius.com: https://genius.com/
 
 
 Fetch Lyrics During Import
@@ -27,7 +26,7 @@ already have them. The lyrics will be stored in the beets database. If the
 ``import.write`` config option is on, then the lyrics will also be written to
 the files' tags.
 
-.. _requests: http://docs.python-requests.org/en/latest/
+.. _requests: https://docs.python-requests.org/en/latest/
 
 
 Configuration
@@ -60,9 +59,11 @@ configuration file. The available options are:
   sources known to be scrapeable.
 - **sources**: List of sources to search for lyrics. An asterisk ``*`` expands
   to all available sources.
-  Default: ``google lyricwiki lyrics.com musixmatch``, i.e., all the
-  sources except for `genius`. The `google` source will be automatically
+  Default: ``google lyricwiki musixmatch genius``, i.e., all the
+  available sources. The ``google`` source will be automatically
   deactivated if no ``google_API_key`` is setup.
+  Both it and the ``genius`` source will only be enabled if BeautifulSoup is
+  installed.
 
 Here's an example of ``config.yaml``::
 
@@ -88,11 +89,44 @@ The ``-p`` option to the ``lyrics`` command makes it print lyrics out to the
 console so you can view the fetched (or previously-stored) lyrics.
 
 The ``-f`` option forces the command to fetch lyrics, even for tracks that
-already have lyrics.
+already have lyrics. Inversely, the ``-l`` option restricts operations
+to lyrics that are locally available, which show lyrics faster without using
+the network at all.
+
+Rendering Lyrics into Other Formats
+-----------------------------------
+
+The ``-r directory`` option renders all lyrics as `reStructuredText`_ (ReST)
+documents in ``directory`` (by default, the current directory). That
+directory, in turn, can be parsed by tools like `Sphinx`_ to generate HTML,
+ePUB, or PDF documents.
+
+A minimal ``conf.py`` and ``index.rst`` files are created the first time the
+command is run. They are not overwritten on subsequent runs, so you can safely
+modify these files to customize the output.
+
+.. _Sphinx: https://www.sphinx-doc.org/
+.. _reStructuredText: http://docutils.sourceforge.net/rst.html
+
+Sphinx supports various `builders
+<https://www.sphinx-doc.org/en/stable/builders.html>`_, but here are a
+few suggestions.
+
+ * Build an HTML version::
+
+    sphinx-build -b html . _build/html
+
+ * Build an ePUB3 formatted file, usable on ebook readers::
+
+    sphinx-build -b epub3 . _build/epub
+
+ * Build a PDF file, which incidentally also builds a LaTeX file::
+
+    sphinx-build -b latex %s _build/latex && make -C _build/latex all-pdf
 
 .. _activate-google-custom-search:
 
-Activate Google custom search
+Activate Google Custom Search
 ------------------------------
 
 Using the Google backend requires `BeautifulSoup`_, which you can install
@@ -114,13 +148,23 @@ Optionally, you can `define a custom search engine`_. Get your search engine's
 token and use it for your ``google_engine_ID`` configuration option. By
 default, beets use a list of sources known to be scrapeable.
 
-.. _define a custom search engine: http://www.google.com/cse/all
+.. _define a custom search engine: https://www.google.com/cse/all
 
 Note that the Google custom search API is limited to 100 queries per day.
 After that, the lyrics plugin will fall back on other declared data sources.
 
-.. _pip: http://www.pip-installer.org/
-.. _BeautifulSoup: http://www.crummy.com/software/BeautifulSoup/bs4/doc/
+.. _pip: https://pip.pypa.io
+.. _BeautifulSoup: https://www.crummy.com/software/BeautifulSoup/bs4/doc/
+
+Activate Genius Lyrics
+----------------------
+
+Like the Google backend, the Genius backend requires the `BeautifulSoup`_
+library. Install it by typing::
+
+    pip install beautifulsoup4
+
+The backend is enabled by default.
 
 .. _lyrics-translation:
 

@@ -18,8 +18,8 @@
 
 from __future__ import division, absolute_import, print_function
 
+import unittest
 from test import _common
-from test._common import unittest
 
 from beets import ui
 
@@ -72,6 +72,16 @@ class InputMethodsTest(_common.TestCase):
             "Prompt", full_items,
             lambda s: self._print_helper2(s, "Prefix"))
         self.assertEqual(items, ['1', '2', '4'])
+
+        # Test selective 3
+        self.io.addinput('s')
+        self.io.addinput('y')
+        self.io.addinput('n')
+        self.io.addinput('y')
+        self.io.addinput('q')
+        items = ui.input_select_objects(
+            "Prompt", full_items, self._print_helper)
+        self.assertEqual(items, ['1', '3'])
 
 
 class InitTest(_common.LibTestCase):

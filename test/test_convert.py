@@ -15,15 +15,26 @@
 
 from __future__ import division, absolute_import, print_function
 
+import sys
 import re
 import os.path
-from test import _common
-from test._common import unittest
-from test import helper
-from test.helper import control_stdin
+import unittest
 
-from beets.mediafile import MediaFile
+from test import _common
+from test import helper
+from test.helper import control_stdin, capture_log
+
+from mediafile import MediaFile
 from beets import util
+
+
+def shell_quote(text):
+    if sys.version_info[0] < 3:
+        import pipes
+        return pipes.quote(text)
+    else:
+        import shlex
+        return shlex.quote(text)
 
 
 class TestHelper(helper.TestHelper):
@@ -38,7 +49,8 @@ class TestHelper(helper.TestHelper):
 
         # A Python script that copies the file and appends a tag.
         stub = os.path.join(_common.RSRC, b'convert_stub.py').decode('utf-8')
-        return u"python '{}' $source $dest {}".format(stub, tag)
+        return u"{} {} $source $dest {}".format(shell_quote(sys.executable),
+                                                shell_quote(stub), tag)
 
     def assertFileTag(self, path, tag):  # noqa
         """Assert that the path is a file and the files content ends with `tag`.
@@ -168,7 +180,7 @@ class ConvertCliTest(unittest.TestCase, TestHelper, ConvertCommand):
         converted = os.path.join(self.convert_dest, b'converted.mp3')
         self.assertFileTag(converted, 'mp3')
 
-    def test_rejecet_confirmation(self):
+    def test_reject_confirmation(self):
         with control_stdin('n'):
             self.run_convert()
         converted = os.path.join(self.convert_dest, b'converted.mp3')
@@ -214,6 +226,11 @@ class ConvertCliTest(unittest.TestCase, TestHelper, ConvertCommand):
         self.run_convert('--pretend')
         converted = os.path.join(self.convert_dest, b'converted.mp3')
         self.assertFalse(os.path.exists(converted))
+
+    def test_empty_query(self):
+        with capture_log('beets.convert') as logs:
+            self.run_convert('An impossible query')
+        self.assertEqual(logs[0], u'convert: Empty query result.')
 
 
 @_common.slow_test()
@@ -266,6 +283,7 @@ class NeverConvertLossyFilesTest(unittest.TestCase, TestHelper,
 
 def suite():
     return unittest.TestLoader().loadTestsFromName(__name__)
+
 
 if __name__ == '__main__':
     unittest.main(defaultTest='suite')

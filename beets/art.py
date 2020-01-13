@@ -22,12 +22,11 @@ from __future__ import division, absolute_import, print_function
 import subprocess
 import platform
 from tempfile import NamedTemporaryFile
-import imghdr
 import os
 
 from beets.util import displayable_path, syspath, bytestring_path
 from beets.util.artresizer import ArtResizer
-from beets import mediafile
+import mediafile
 
 
 def mediafile_image(image_path, maxwidth=None):
@@ -52,7 +51,8 @@ def get_art(log, item):
 
 
 def embed_item(log, item, imagepath, maxwidth=None, itempath=None,
-               compare_threshold=0, ifempty=False, as_album=False):
+               compare_threshold=0, ifempty=False, as_album=False,
+               id3v23=None):
     """Embed an image into the item's media file.
     """
     # Conditions and filters.
@@ -61,8 +61,8 @@ def embed_item(log, item, imagepath, maxwidth=None, itempath=None,
             log.info(u'Image not similar; skipping.')
             return
     if ifempty and get_art(log, item):
-            log.info(u'media file already contained art')
-            return
+        log.info(u'media file already contained art')
+        return
     if maxwidth and not as_album:
         imagepath = resize_image(log, imagepath, maxwidth)
 
@@ -81,7 +81,7 @@ def embed_item(log, item, imagepath, maxwidth=None, itempath=None,
                  image.mime_type)
         return
 
-    item.try_write(path=itempath, tags={'images': [image]})
+    item.try_write(path=itempath, tags={'images': [image]}, id3v23=id3v23)
 
 
 def embed_album(log, album, maxwidth=None, quiet=False,
@@ -180,7 +180,7 @@ def check_art_similarity(log, item, imagepath, compare_threshold):
                 log.debug(u'IM output is not a number: {0!r}', out_str)
                 return
 
-            log.debug(u'ImageMagick copmare score: {0}', phash_diff)
+            log.debug(u'ImageMagick compare score: {0}', phash_diff)
             return phash_diff <= compare_threshold
 
     return True
@@ -194,7 +194,7 @@ def extract(log, outpath, item):
         return
 
     # Add an extension to the filename.
-    ext = imghdr.what(None, h=art)
+    ext = mediafile.image_extension(art)
     if not ext:
         log.warning(u'Unknown image type in {0}.',
                     displayable_path(item.path))

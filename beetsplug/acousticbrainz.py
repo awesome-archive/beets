@@ -1,168 +1,321 @@
-# -*- coding: utf-8 -*-
-# This file is part of beets.
-# Copyright 2015-2016, Ohm Patel.
-#
-# Permission is hereby granted, free of charge, to any person obtaining
-# a copy of this software and associated documentation files (the
-# "Software"), to deal in the Software without restriction, including
-# without limitation the rights to use, copy, modify, merge, publish,
-# distribute, sublicense, and/or sell copies of the Software, and to
-# permit persons to whom the Software is furnished to do so, subject to
-# the following conditions:
-#
-# The above copyright notice and this permission notice shall be
-# included in all copies or substantial portions of the Software.
+"""Fetch various AcousticBrainz metadata using MBID."""
 
-"""Fetch various AcousticBrainz metadata using MBID.
-"""
-from __future__ import division, absolute_import, print_function
+from __future__ import annotations
+
+from collections import defaultdict
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 import requests
-import operator
 
 from beets import plugins, ui
-from functools import reduce
+from beets.dbcore import types
+from beets.exceptions import UserError
 
-ACOUSTIC_BASE = "https://acousticbrainz.org/"
+if TYPE_CHECKING:
+    from collections.abc import Iterator, Sequence
+
+    from beets.importer import ImportSession, ImportTask
+    from beets.library import Item, Library
+
+    from ._typing import JSONDict
+
+
+class AcousticBrainzCLIOpts(Protocol):
+    force_refetch: bool
+    limit: int | None
+
+
 LEVELS = ["/low-level", "/high-level"]
+ABSCHEME = {
+    "highlevel": {
+        "danceability": {"all": {"danceable": "danceable"}},
+        "gender": {"value": "gender"},
+        "genre_rosamerica": {"value": "genre_rosamerica"},
+        "mood_acoustic": {"all": {"acoustic": "mood_acoustic"}},
+        "mood_aggressive": {"all": {"aggressive": "mood_aggressive"}},
+        "mood_electronic": {"all": {"electronic": "mood_electronic"}},
+        "mood_happy": {"all": {"happy": "mood_happy"}},
+        "mood_party": {"all": {"party": "mood_party"}},
+        "mood_relaxed": {"all": {"relaxed": "mood_relaxed"}},
+        "mood_sad": {"all": {"sad": "mood_sad"}},
+        "moods_mirex": {"value": "moods_mirex"},
+        "ismir04_rhythm": {"value": "rhythm"},
+        "tonal_atonal": {"all": {"tonal": "tonal"}},
+        "timbre": {"value": "timbre"},
+        "voice_instrumental": {"value": "voice_instrumental"},
+    },
+    "lowlevel": {"average_loudness": "average_loudness"},
+    "rhythm": {"bpm": "bpm"},
+    "tonal": {
+        "chords_changes_rate": "chords_changes_rate",
+        "chords_key": "chords_key",
+        "chords_number_rate": "chords_number_rate",
+        "chords_scale": "chords_scale",
+        "key_key": ("initial_key", 0),
+        "key_scale": ("initial_key", 1),
+        "key_strength": "key_strength",
+    },
+}
 
 
 class AcousticPlugin(plugins.BeetsPlugin):
-    def __init__(self):
-        super(AcousticPlugin, self).__init__()
+    item_types: ClassVar[dict[str, types.Type]] = {
+        "average_loudness": types.Float(6),
+        "chords_changes_rate": types.Float(6),
+        "chords_key": types.STRING,
+        "chords_number_rate": types.Float(6),
+        "chords_scale": types.STRING,
+        "danceable": types.Float(6),
+        "gender": types.STRING,
+        "genre_rosamerica": types.STRING,
+        "initial_key": types.STRING,
+        "key_strength": types.Float(6),
+        "mood_acoustic": types.Float(6),
+        "mood_aggressive": types.Float(6),
+        "mood_electronic": types.Float(6),
+        "mood_happy": types.Float(6),
+        "mood_party": types.Float(6),
+        "mood_relaxed": types.Float(6),
+        "mood_sad": types.Float(6),
+        "moods_mirex": types.STRING,
+        "rhythm": types.Float(6),
+        "timbre": types.STRING,
+        "tonal": types.Float(6),
+        "voice_instrumental": types.STRING,
+    }
 
-        self.config.add({'auto': True})
-        if self.config['auto']:
-            self.register_listener('import_task_files',
-                                   self.import_task_files)
+    def __init__(self) -> None:
+        super().__init__()
 
-    def commands(self):
-        cmd = ui.Subcommand('acousticbrainz',
-                            help=u"fetch metadata from AcousticBrainz")
+        self._log.warning("This plugin is deprecated.")
 
-        def func(lib, opts, args):
-            items = lib.items(ui.decargs(args))
-            fetch_info(self._log, items, ui.should_write())
+        self.config.add(
+            {"auto": True, "force": False, "tags": [], "base_url": ""}
+        )
 
+        self.base_url = self.config["base_url"].as_str()
+        if self.base_url:
+            if not self.base_url.startswith("http"):
+                raise UserError(
+                    "AcousticBrainz server base URL must start "
+                    "with an HTTP scheme"
+                )
+            if self.base_url[-1] != "/":
+                self.base_url = f"{self.base_url}/"
+
+        if self.config["auto"]:
+            self.register_listener("import_task_files", self.import_task_files)
+
+    def commands(self) -> list[ui.Subcommand]:
+        cmd = ui.Subcommand(
+            "acousticbrainz", help="fetch metadata from AcousticBrainz"
+        )
+        cmd.parser.add_option(
+            "-f",
+            "--force",
+            dest="force_refetch",
+            action="store_true",
+            default=False,
+            help="re-download data when already present",
+        )
+
+        def func(
+            lib: Library, opts: AcousticBrainzCLIOpts, args: list[str]
+        ) -> None:
+            items = lib.items(args, limit=opts.limit)
+            self._fetch_info(
+                items,
+                ui.should_write(),
+                opts.force_refetch or self.config["force"].get(bool),
+            )
+
+        cmd.parser.add_limit_option()
         cmd.func = func
         return [cmd]
 
-    def import_task_files(self, session, task):
-        """Function is called upon beet import.
-        """
+    def import_task_files(
+        self, session: ImportSession, task: ImportTask
+    ) -> None:
+        """Function is called upon beet import."""
+        self._fetch_info(task.imported_items(), False, True)
 
-        items = task.imported_items()
-        fetch_info(self._log, items, False)
+    def _get_data(self, mbid: str) -> JSONDict:
+        if not self.base_url:
+            raise UserError(
+                "This plugin is deprecated since AcousticBrainz has shut "
+                "down. See the base_url configuration option."
+            )
+        data = {}
+        for url in _generate_urls(self.base_url, mbid):
+            self._log.debug("fetching URL: {}", url)
 
-
-def fetch_info(log, items, write):
-    """Get data from AcousticBrainz for the items.
-    """
-
-    def get_value(*map_path):
-        try:
-            return reduce(operator.getitem, map_path, data)
-        except KeyError:
-            log.debug(u'Invalid Path: {}', map_path)
-
-    for item in items:
-        if item.mb_trackid:
-            log.info(u'getting data for: {}', item)
-
-            # Fetch the data from the AB API.
-            urls = [generate_url(item.mb_trackid, path) for path in LEVELS]
-            log.debug(u'fetching URLs: {}', ' '.join(urls))
             try:
-                res = [requests.get(url) for url in urls]
+                res = requests.get(url, timeout=10)
             except requests.RequestException as exc:
-                log.info(u'request error: {}', exc)
-                continue
+                self._log.info("request error: {}", exc)
+                return {}
 
-            # Check for missing tracks.
-            if any(r.status_code == 404 for r in res):
-                log.info(u'recording ID {} not found', item.mb_trackid)
-                continue
+            if res.status_code == 404:
+                self._log.info("recording ID {} not found", mbid)
+                return {}
 
-            # Parse the JSON response.
             try:
-                data = res[0].json()
-                data.update(res[1].json())
+                data.update(res.json())
             except ValueError:
-                log.debug(u'Invalid Response: {} & {}', [r.text for r in res])
+                self._log.debug("Invalid Response: {.text}", res)
+                return {}
 
-            # Get each field and assign it on the item.
-            item.danceable = get_value(
-                "highlevel", "danceability", "all", "danceable",
-            )
-            item.gender = get_value(
-                "highlevel", "gender", "value",
-            )
-            item.genre_rosamerica = get_value(
-                "highlevel", "genre_rosamerica", "value"
-            )
-            item.mood_acoustic = get_value(
-                "highlevel", "mood_acoustic", "all", "acoustic"
-            )
-            item.mood_aggressive = get_value(
-                "highlevel", "mood_aggressive", "all", "aggressive"
-            )
-            item.mood_electronic = get_value(
-                "highlevel", "mood_electronic", "all", "electronic"
-            )
-            item.mood_happy = get_value(
-                "highlevel", "mood_happy", "all", "happy"
-            )
-            item.mood_party = get_value(
-                "highlevel", "mood_party", "all", "party"
-            )
-            item.mood_relaxed = get_value(
-                "highlevel", "mood_relaxed", "all", "relaxed"
-            )
-            item.mood_sad = get_value(
-                "highlevel", "mood_sad", "all", "sad"
-            )
-            item.rhythm = get_value(
-                "highlevel", "ismir04_rhythm", "value"
-            )
-            item.tonal = get_value(
-                "highlevel", "tonal_atonal", "all", "tonal"
-            )
-            item.voice_instrumental = get_value(
-                "highlevel", "voice_instrumental", "value"
-            )
-            item.average_loudness = get_value(
-                "lowlevel", "average_loudness"
-            )
-            item.bpm = get_value(
-                "rhythm", "bpm"
-            )
-            item.chords_changes_rate = get_value(
-                "tonal", "chords_changes_rate"
-            )
-            item.chords_key = get_value(
-                "tonal", "chords_key"
-            )
-            item.chords_number_rate = get_value(
-                "tonal", "chords_number_rate"
-            )
-            item.chords_scale = get_value(
-                "tonal", "chords_scale"
-            )
-            item.initial_key = '{} {}'.format(
-                get_value("tonal", "key_key"),
-                get_value("tonal", "key_scale")
-            )
-            item.key_strength = get_value(
-                "tonal", "key_strength"
-            )
+        return data
 
-            # Store the data.
-            item.store()
-            if write:
-                item.try_write()
+    def _fetch_info(
+        self, items: Sequence[Item], write: bool, force: bool
+    ) -> None:
+        """Fetch additional information from AcousticBrainz for the `item`s."""
+        tags = self.config["tags"].as_str_seq()
+        for item in items:
+            # If we're not forcing re-downloading for all tracks, check
+            # whether the data is already present. We use one
+            # representative field name to check for previously fetched
+            # data.
+            if not force:
+                mood_str = item.get("mood_acoustic", "")
+                if mood_str:
+                    self._log.info("data already present for: {}", item)
+                    continue
+
+            # We can only fetch data for tracks with MBIDs.
+            if not item.mb_trackid:
+                continue
+
+            self._log.info("getting data for: {}", item)
+            data = self._get_data(item.mb_trackid)
+            if data:
+                for attr, val in self._map_data_to_scheme(data, ABSCHEME):
+                    if not tags or attr in tags:
+                        self._log.debug(
+                            "attribute {} of {} set to {}", attr, item, val
+                        )
+                        setattr(item, attr, val)
+                    else:
+                        self._log.debug(
+                            "skipping attribute {} of {}"
+                            " (value {}) due to config",
+                            attr,
+                            item,
+                            val,
+                        )
+                item.store()
+                if write:
+                    item.try_write()
+
+    def _map_data_to_scheme(
+        self, data: JSONDict, scheme: JSONDict
+    ) -> Iterator[tuple[str, Any]]:
+        """Given `data` as a structure of nested dictionaries, and
+        `scheme` as a structure of nested dictionaries , `yield` tuples
+        `(attr, val)` where `attr` and `val` are corresponding leaf
+        nodes in `scheme` and `data`.
+
+        As its name indicates, `scheme` defines how the data is structured,
+        so this function tries to find leaf nodes in `data` that correspond
+        to the leafs nodes of `scheme`, and not the other way around.
+        Leaf nodes of `data` that do not exist in the `scheme` do not matter.
+        If a leaf node of `scheme` is not present in `data`,
+        no value is yielded for that attribute and a simple warning is issued.
+
+        Finally, to account for attributes of which the value is split between
+        several leaf nodes in `data`, leaf nodes of `scheme` can be tuples
+        `(attr, order)` where `attr` is the attribute to which the leaf node
+        belongs, and `order` is the place at which it should appear in the
+        value. The different `value`s belonging to the same `attr` are simply
+        joined with `' '`. This is hardcoded and not very flexible, but it gets
+        the job done.
+
+        For example:
+
+        >>> scheme = {
+            'key1': 'attribute',
+            'key group': {
+                'subkey1': 'subattribute',
+                'subkey2': ('composite attribute', 0)
+            },
+            'key2': ('composite attribute', 1)
+        }
+        >>> data = {
+            'key1': 'value',
+            'key group': {
+                'subkey1': 'subvalue',
+                'subkey2': 'part 1 of composite attr'
+            },
+            'key2': 'part 2'
+        }
+        >>> print(list(_map_data_to_scheme(data, scheme)))
+        [('subattribute', 'subvalue'),
+         ('attribute', 'value'),
+         ('composite attribute', 'part 1 of composite attr part 2')]
+        """
+        # First, we traverse `scheme` and `data`, `yield`ing all the non
+        # composites attributes straight away and populating the dictionary
+        # `composites` with the composite attributes.
+
+        # When we are finished traversing `scheme`, `composites` should
+        # map each composite attribute to an ordered list of the values
+        # belonging to the attribute, for example:
+        # `composites = {'initial_key': ['B', 'minor']}`.
+
+        # The recursive traversal.
+        composites = defaultdict[str, list[str]](list)
+        yield from self._data_to_scheme_child(data, scheme, composites)
+
+        # When composites has been populated, yield the composite attributes
+        # by joining their parts.
+        for composite_attr, value_parts in composites.items():
+            yield composite_attr, " ".join(value_parts)
+
+    def _data_to_scheme_child(
+        self,
+        subdata: JSONDict,
+        subscheme: JSONDict,
+        composites: dict[str, list[str]],
+    ) -> Iterator[tuple[str, Any]]:
+        """The recursive business logic of :meth:`_map_data_to_scheme`:
+        Traverse two structures of nested dictionaries in parallel and `yield`
+        tuples of corresponding leaf nodes.
+
+        If a leaf node belongs to a composite attribute (is a `tuple`),
+        populate `composites` rather than yielding straight away.
+        All the child functions for a single traversal share the same
+        `composites` instance, which is passed along.
+        """
+        for k, v in subscheme.items():
+            if k in subdata:
+                if isinstance(v, dict):
+                    yield from self._data_to_scheme_child(
+                        subdata[k], v, composites
+                    )
+                elif isinstance(v, tuple):
+                    composite_attribute, part_number = v
+                    attribute_parts = composites[composite_attribute]
+                    # Parts are not guaranteed to be inserted in order
+                    while len(attribute_parts) <= part_number:
+                        attribute_parts.append("")
+                    attribute_parts[part_number] = subdata[k]
+                else:
+                    yield v, subdata[k]
+            else:
+                self._log.warning(
+                    "Acousticbrainz did not provide info about {}", k
+                )
+                self._log.debug(
+                    "Data {} could not be mapped to scheme {} "
+                    "because key {} was not found",
+                    subdata,
+                    v,
+                    k,
+                )
 
 
-def generate_url(mbid, level):
-    """Generates AcousticBrainz end point url for given MBID.
-    """
-    return ACOUSTIC_BASE + mbid + level
+def _generate_urls(base_url: str, mbid: str) -> Iterator[str]:
+    """Generates AcousticBrainz end point urls for given `mbid`."""
+    for level in LEVELS:
+        yield f"{base_url}{mbid}{level}"

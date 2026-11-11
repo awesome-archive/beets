@@ -1,143 +1,179 @@
-# -*- coding: utf-8 -*-
-# This file is part of beets.
-# Copyright 2016, Blemjhoo Tezoulbr <baobab@heresiarch.info>.
-#
-# Permission is hereby granted, free of charge, to any person obtaining
-# a copy of this software and associated documentation files (the
-# "Software"), to deal in the Software without restriction, including
-# without limitation the rights to use, copy, modify, merge, publish,
-# distribute, sublicense, and/or sell copies of the Software, and to
-# permit persons to whom the Software is furnished to do so, subject to
-# the following conditions:
-#
-# The above copyright notice and this permission notice shall be
-# included in all copies or substantial portions of the Software.
+"""Clears tag fields in media files."""
 
-""" Clears tag fields in media files."""
-
-from __future__ import division, absolute_import, print_function
+from __future__ import annotations
 
 import re
-from beets.plugins import BeetsPlugin
-from beets.mediafile import MediaFile
-from beets.importer import action
-from beets.util import confit
-import six
+from typing import TYPE_CHECKING
 
-__author__ = 'baobab@heresiarch.info'
-__version__ = '0.10'
+import confuse
+from mediafile import MediaFile
+
+from beets.importer import Action
+from beets.plugins import BeetsPlugin
+from beets.ui import Subcommand, input_yn
+
+if TYPE_CHECKING:
+    import optparse
+    from collections.abc import Iterable
+
+    from beets.importer import ImportSession, ImportTask
+    from beets.library import Item, Library
+
+    from ._typing import JSONDict
+
+
+__author__ = "baobab@heresiarch.info"
+
+
+ARTWORK_FIELDS = {"images", "art"}
 
 
 class ZeroPlugin(BeetsPlugin):
+    fields_to_progs: dict[str, list[re.Pattern[str]]]
 
-    _instance = None
+    def __init__(self) -> None:
+        super().__init__()
 
-    def __init__(self):
-        super(ZeroPlugin, self).__init__()
+        self.register_listener("write", self.write_event)
+        self.register_listener(
+            "import_task_choice", self.import_task_choice_event
+        )
 
-        # Listeners.
-        self.register_listener('write', self.write_event)
-        self.register_listener('import_task_choice',
-                               self.import_task_choice_event)
+        self.config.add(
+            {
+                "auto": True,
+                "fields": [],
+                "keep_fields": [],
+                "update_database": False,
+                "omit_single_disc": False,
+            }
+        )
 
-        self.config.add({
-            'fields': [],
-            'keep_fields': [],
-            'update_database': False,
-        })
-
-        self.patterns = {}
+        self.fields_to_progs = {}
         self.warned = False
 
-        # We'll only handle `fields` or `keep_fields`, but not both.
-        if self.config['fields'] and self.config['keep_fields']:
-            self._log.warning(
-                u'cannot blacklist and whitelist at the same time'
-            )
-
+        """Read the bulk of the config into `self.fields_to_progs`.
+        After construction, `fields_to_progs` contains all the fields that
+        should be zeroed as keys and maps each of those to a list of compiled
+        regexes (progs) as values.
+        A field is zeroed if its value matches one of the associated progs. If
+        progs is empty, then the associated field is always zeroed.
+        """
+        if self.config["fields"] and self.config["keep_fields"]:
+            self._log.warning("cannot blacklist and whitelist at the same time")
         # Blacklist mode.
-        if self.config['fields']:
-            self.validate_config('fields')
-            for field in self.config['fields'].as_str_seq():
-                self.set_pattern(field)
-
+        elif self.config["fields"]:
+            for field in self.config["fields"].as_str_seq():
+                self._set_pattern(field)
         # Whitelist mode.
-        elif self.config['keep_fields']:
-            self.validate_config('keep_fields')
-
+        elif self.config["keep_fields"]:
+            keep = set(self.config["keep_fields"].as_str_seq())
+            # ensure that all artwork fields are added when at least
+            # one of them is present
+            if keep & ARTWORK_FIELDS:
+                keep.update(ARTWORK_FIELDS)
             for field in MediaFile.fields():
-                if field in self.config['keep_fields'].as_str_seq():
-                    continue
-                self.set_pattern(field)
+                if field not in keep and field not in (
+                    "id",
+                    "path",
+                    "album_id",
+                ):
+                    self._set_pattern(field)
 
-            # These fields should always be preserved.
-            for key in ('id', 'path', 'album_id'):
-                if key in self.patterns:
-                    del self.patterns[key]
+    def commands(self) -> list[Subcommand]:
+        zero_command = Subcommand("zero", help="set fields to null")
 
-    def validate_config(self, mode):
-        """Check whether fields in the configuration are valid.
+        def zero_fields(
+            lib: Library, opts: optparse.Values, args: list[str]
+        ) -> None:
+            if not args and not input_yn(
+                "Remove fields for all items? (Y/n)", True
+            ):
+                return
+            for item in lib.items(args, limit=opts.limit):
+                self.process_item(item)
 
-        `mode` should either be "fields" or "keep_fields", indicating
-        the section of the configuration to validate.
+        zero_command.parser.add_limit_option()
+        zero_command.func = zero_fields
+        return [zero_command]
+
+    def _set_pattern(self, field: str) -> None:
+        """Populate `self.fields_to_progs` for a given field.
+        Do some sanity checks then compile the regexes.
         """
-        for field in self.config[mode].as_str_seq():
-            if field not in MediaFile.fields():
-                self._log.error(u'invalid field: {0}', field)
-                continue
-            if mode == 'fields' and field in ('id', 'path', 'album_id'):
-                self._log.warning(u'field \'{0}\' ignored, zeroing '
-                                  u'it would be dangerous', field)
-                continue
+        if field not in MediaFile.fields():
+            self._log.error("invalid field: {}", field)
+        elif field in ("id", "path", "album_id"):
+            self._log.warning(
+                "field '{}' ignored, zeroing it would be dangerous", field
+            )
+        else:
+            try:
+                for pattern in self.config[field].as_str_seq():
+                    prog = re.compile(pattern, re.IGNORECASE)
+                    self.fields_to_progs.setdefault(field, []).append(prog)
+            except confuse.NotFoundError:
+                # Matches everything
+                self.fields_to_progs[field] = []
 
-    def set_pattern(self, field):
-        """Set a field in `self.patterns` to a string list corresponding to
-        the configuration, or `True` if the field has no specific
-        configuration.
-        """
-        try:
-            self.patterns[field] = self.config[field].as_str_seq()
-        except confit.NotFoundError:
-            # Matches everything
-            self.patterns[field] = True
-
-    def import_task_choice_event(self, session, task):
-        """Listen for import_task_choice event."""
-        if task.choice_flag == action.ASIS and not self.warned:
-            self._log.warning(u'cannot zero in \"as-is\" mode')
+    def import_task_choice_event(
+        self, session: ImportSession, task: ImportTask
+    ) -> None:
+        if task.choice_flag == Action.ASIS and not self.warned:
+            self._log.warning('cannot zero in "as-is" mode')
             self.warned = True
         # TODO request write in as-is mode
 
-    @classmethod
-    def match_patterns(cls, field, patterns):
-        """Check if field (as string) is matching any of the patterns in
-        the list.
-        """
-        if patterns is True:
-            return True
-        for p in patterns:
-            if re.search(p, six.text_type(field), flags=re.IGNORECASE):
-                return True
-        return False
+    def write_event(self, item: Item, path: bytes, tags: JSONDict) -> None:
+        if self.config["auto"]:
+            self.set_fields(item, tags)
 
-    def write_event(self, item, path, tags):
-        """Set values in tags to `None` if the key and value are matched
-        by `self.patterns`.
+    def set_fields(self, item: Item, tags: JSONDict) -> bool:
+        """Set values in `tags` to `None` if the field is in
+        `self.fields_to_progs` and any of the corresponding `progs` matches the
+        field value.
+        Also update the `item` itself if `update_database` is set in the
+        config.
         """
-        if not self.patterns:
-            self._log.warning(u'no fields, nothing to do')
-            return
+        fields_set = False
+        if self.config["omit_single_disc"].get(bool) and item.disctotal == 1:
+            for tag in {"disc", "disctotal"} & set(tags):
+                tags[tag] = None
+                fields_set = True
 
-        for field, patterns in self.patterns.items():
+        if not self.fields_to_progs:
+            self._log.warning("no fields list to remove")
+
+        for field, progs in self.fields_to_progs.items():
             if field in tags:
                 value = tags[field]
-                match = self.match_patterns(tags[field], patterns)
+                match = _match_progs(tags[field], progs)
             else:
-                value = ''
-                match = patterns is True
+                value = ""
+                match = not progs
 
             if match:
-                self._log.debug(u'{0}: {1} -> None', field, value)
+                fields_set = True
+                self._log.debug("{}: {} -> None", field, value)
                 tags[field] = None
-                if self.config['update_database']:
+                if self.config["update_database"]:
                     item[field] = None
+
+        return fields_set
+
+    def process_item(self, item: Item) -> None:
+        tags = dict(item)
+
+        if self.set_fields(item, tags):
+            item.write(tags=tags)
+            if self.config["update_database"]:
+                item.store(fields=tags)
+
+
+def _match_progs(value: str, progs: Iterable[re.Pattern[str]]) -> bool:
+    """Check if `value` (as string) is matching any of the compiled regexes in
+    the `progs` list.
+    """
+    if not progs:
+        return True
+    return any(prog.search(str(value)) for prog in progs)

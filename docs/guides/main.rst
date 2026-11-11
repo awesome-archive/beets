@@ -1,243 +1,310 @@
 Getting Started
 ===============
 
-Welcome to `beets`_! This guide will help you begin using it to make your music
-collection better.
+Welcome to beets_! This guide will help get started with improving and
+organizing your music collection.
 
-.. _beets: http://beets.io/
+.. _beets: https://beets.io/
 
-Installing
-----------
+Quick Installation
+------------------
 
-You will need Python. (Beets is written for `Python 2.7`_. 2.6 support has been
-dropped, and Python 3.x is not yet supported.)
+Beets is distributed via PyPI_ and can be installed by most users with a single
+command:
 
-.. _Python 2.7: http://www.python.org/download/
+.. include:: installation.rst
+    :start-after: <!-- start-quick-install -->
+    :end-before: <!-- end-quick-install -->
 
-* **Mac OS X** v10.7 (Lion) and later include Python 2.7 out of the box.
+.. admonition:: Need more information?
 
-* On **Debian or Ubuntu**, depending on the version, beets is available as an
-  official package (`Debian details`_, `Ubuntu details`_), so try typing:
-  ``apt-get install beets``. But the version in the repositories might lag
-  behind, so make sure you read the right version of these docs. If you want
-  the latest version, you can get everything you need to install with pip
-  as described below by running:
-  ``apt-get install python-dev python-pip``
+    Having trouble with the commands above? Looking for information how to
+    install plugins and keep Beets updated? See the :doc:`complete installation
+    guide </guides/installation>` for:
 
-* On **Arch Linux**, `beets is in [community]`_, so just run ``pacman -S
-  beets``. (There's also a bleeding-edge `dev package`_ in the AUR, which will
-  probably set your computer on fire.)
+    - Managing plugins with uv tool
+    - OS-specific installation notes
+    - Package manager options
 
-* For **Gentoo Linux**, beets is in Portage as ``media-sound/beets``. Just run
-  ``emerge beets`` to install. There are several USE flags available for
-  optional plugin dependencies.
+.. _pypi: https://pypi.org/project/beets/
 
-* On **FreeBSD**, there's a `beets port`_ at ``audio/beets``.
+Basic Configuration
+-------------------
 
-* On **OpenBSD**, beets can be installed with ``pkg_add beets``.
+Before using beets, you'll need a configuration file. This YAML file tells beets
+where to store your music and how to organize it.
 
-* For **Slackware**, there's a `SlackBuild`_ available.
+While beets is highly configurable, you only need a few basic settings to get
+started.
 
-* On **Fedora** 22 or later, there is a `DNF package`_ (or three)::
+1. **Open the config file:**
+       .. code-block:: console
 
-      $ sudo dnf install beets beets-plugins beets-doc
+           beet config -e
 
-* On **NixOS**, run ``nix-env -i beets``.
+       This creates the file (if needed) and opens it in your default editor.
+       You can also find its location with ``beet config -p``.
+2. **Add required settings:**
+       In the config file, set the ``directory`` option to the path where you
+       want beets to store your music files. Set the ``library`` option to the
+       path where you want beets to store its database file.
 
-.. _copr: https://copr.fedoraproject.org/coprs/afreof/beets/
-.. _dnf package: https://apps.fedoraproject.org/packages/beets
-.. _SlackBuild: http://slackbuilds.org/repository/14.1/multimedia/beets/
-.. _beets port: http://portsmon.freebsd.org/portoverview.py?category=audio&portname=beets
-.. _beets from AUR: https://aur.archlinux.org/packages/beets-git/
-.. _dev package: https://aur.archlinux.org/packages/beets-git/
-.. _Debian details: http://packages.qa.debian.org/b/beets.html
-.. _Ubuntu details: https://launchpad.net/ubuntu/+source/beets
-.. _beets is in [community]: https://www.archlinux.org/packages/community/any/beets/
+       .. code-block:: yaml
 
-If you have `pip`_, just say ``pip install beets`` (you might need ``sudo`` in
-front of that). On Arch, you'll need to use ``pip2`` instead of ``pip``.
+           directory: ~/music
+           library: ~/data/musiclibrary.db
+3. **Choose your import style** (pick one):
+       Beets offers flexible import strategies to match your workflow. Choose
+       one of the following approaches and put one of the following in your
+       config file:
 
-To install without pip, download beets from `its PyPI page`_ and run ``python
-setup.py install`` in the directory therein.
+       .. tab-set::
 
-.. _its PyPI page: http://pypi.python.org/pypi/beets#downloads
-.. _pip: http://pip.openplans.org/
+           .. tab-item:: Copy Files (Default)
 
-The best way to upgrade beets to a new version is by running ``pip install -U
-beets``. You may want to follow `@b33ts`_ on Twitter to hear about progress on
-new versions.
+               This is the default configuration and assumes you want to start a new organized music folder (inside ``directory`` above). During import we will *copy* cleaned-up music into that empty folder.
 
-.. _@b33ts: http://twitter.com/b33ts
+               .. code-block:: yaml
 
-Installing on Windows
-^^^^^^^^^^^^^^^^^^^^^
-
-Installing beets on Windows can be tricky. Following these steps might help you
-get it right:
-
-1. If you don't have it, `install Python`_ (you want Python 2.7).
-
-2. If you haven't done so already, set your ``PATH`` environment variable to
-   include Python and its scripts. To do so, you have to get the "Properties"
-   window for "My Computer", then choose the "Advanced" tab, then hit the
-   "Environment Variables" button, and then look for the ``PATH`` variable in
-   the table. Add the following to the end of the variable's value:
-   ``;C:\Python27;C:\Python27\Scripts``.
-
-3. Next, `install pip`_ (if you don't have it already) by downloading and
-   running the `get-pip.py`_ script.
-
-4. Now install beets by running: ``pip install beets``
-
-5. You're all set! Type ``beet`` at the command prompt to make sure everything's
-   in order.
-
-Windows users may also want to install a context menu item for importing files
-into beets. Just download and open `beets.reg`_ to add the necessary keys to the
-registry. You can then right-click a directory and choose "Import with beets".
-If Python is in a nonstandard location on your system, you may have to edit the
-command path manually.
-
-Because I don't use Windows myself, I may have missed something. If you have
-trouble or you have more detail to contribute here, please direct it to
-`the mailing list`_.
-
-.. _install Python: http://python.org/download/
-.. _beets.reg: https://github.com/beetbox/beets/blob/master/extra/beets.reg
-.. _install pip: http://www.pip-installer.org/en/latest/installing.html#install-pip
-.. _get-pip.py: https://raw.github.com/pypa/pip/master/contrib/get-pip.py
+                   import:
+                       copy: yes    # Copy files to new location
 
 
-Configuring
------------
+           .. tab-item:: Move Files
 
-You'll want to set a few basic options before you start using beets. The
-:doc:`configuration </reference/config>` is stored in a text file. You
-can show its location by running ``beet config -p``, though it may not
-exist yet. Run ``beet config -e`` to edit the configuration in your
-favorite text editor. The file will start out empty, but here's good
-place to start::
+               Start with a new empty directory, but *move* new music in instead of copying it (saving disk space).
 
-    directory: ~/music
-    library: ~/data/musiclibrary.blb
+               .. code-block:: yaml
 
-Change that first path to a directory where you'd like to keep your music. Then,
-for ``library``, choose a good place to keep a database file that keeps an index
-of your music. (The config's format is `YAML`_. You'll want to configure your
-text editor to use spaces, not real tabs, for indentation.)
+                   import:
+                       move: yes    # Move files to new location
 
+           .. tab-item:: Use Existing Structure
 
-The default configuration assumes you want to start a new organized music folder
-(that ``directory`` above) and that you'll *copy* cleaned-up music into that
-empty folder using beets' ``import`` command (see below). But you can configure
-beets to behave many other ways:
+               Keep your current directory structure; importing should never move or copy files but instead just correct the tags on music. Make sure to point ``directory`` at the place where your music is currently stored.
 
-* Start with a new empty directory, but *move* new music in instead of copying
-  it (saving disk space). Put this in your config file::
+               .. code-block:: yaml
+
+                   import:
+                       copy: no     # Use files in place
+
+           .. tab-item:: Read-Only Mode
+
+               Keep everything exactly as-is; only track metadata in database. (Corrected tags will still be stored in beets' database, and you can use them to do renaming or tag changes later.)
+
+               .. code-block:: yaml
+
+                   import:
+                       copy: no     # Use files in place
+                       write: no    # Don't modify tags
+4. **Add customization via plugins (optional):**
+       Beets comes with many plugins that extend its functionality. You can
+       enable plugins by adding a ``plugins`` section to your config file.
+
+       We recommend adding at least one :ref:`Autotagger Plugin
+       <autotagger_extensions>` to help with fetching metadata during import.
+       For getting started, :doc:`MusicBrainz </plugins/musicbrainz>` is a good
+       choice.
+
+       .. code-block:: yaml
+
+           plugins:
+             - musicbrainz  # Example plugin for fetching metadata
+             - ... other plugins you want ...
+
+       You can find a list of available plugins in the :doc:`plugins index
+       </plugins/index>`.
+
+.. _yaml: https://yaml.org/
+
+To validate that you've set up your configuration and it is valid YAML, you can
+type ``beet version`` to see a list of enabled plugins or ``beet config`` to get
+a complete listing of your current configuration.
+
+.. dropdown:: Minimal configuration
+
+    Here's a sample configuration file that includes the settings mentioned above:
+
+    .. code-block:: yaml
+
+        directory: ~/music
+        library: ~/data/musiclibrary.db
 
         import:
-            move: yes
+            move: yes    # Move files to new location
+            # copy: no   # Use files in place
+            # write: no  # Don't modify tags
 
-* Keep your current directory structure; importing should never move or copy
-  files but instead just correct the tags on music. Put the line ``copy: no``
-  under the ``import:`` heading in your config file to disable any copying or
-  renaming. Make sure to point ``directory`` at the place where your music is
-  currently stored.
+        plugins:
+          - musicbrainz  # Example plugin for fetching metadata
+          # - ... other plugins you want ...
 
-* Keep your current directory structure and *do not* correct files' tags: leave
-  files completely unmodified on your disk. (Corrected tags will still be stored
-  in beets' database, and you can use them to do renaming or tag changes later.)
-  Put this in your config file::
+    You can copy and paste this into your config file and modify it as needed.
 
-        import:
-            copy: no
-            write: no
+.. admonition:: Ready for more?
 
-  to disable renaming and tag-writing.
+    For a complete reference of all configuration options, see the
+    :doc:`configuration reference </reference/config>`.
 
-There are approximately six million other configuration options you can set
-here, including the directory and file naming scheme. See
-:doc:`/reference/config` for a full reference.
+Importing Your Music
+--------------------
 
-.. _YAML: http://yaml.org/
+Now you're ready to import your music into beets!
 
-Importing Your Library
-----------------------
+.. important::
 
-There are two good ways to bring your existing library into beets. You can
-either: (a) quickly bring all your files with all their current metadata into
-beets' database, or (b) use beets' highly-refined autotagger to find canonical
-metadata for every album you import. Option (a) is really fast, but option (b)
-makes sure all your songs' tags are exactly right from the get-go. The point
-about speed bears repeating: using the autotagger on a large library can take a
-very long time, and it's an interactive process. So set aside a good chunk of
-time if you're going to go that route. For more on the interactive
-tagging process, see :doc:`tagger`.
+    Importing can modify and move your music files. **Make sure you have a
+    recent backup** before proceeding.
 
-If you've got time and want to tag all your music right once and for all, do
-this::
+Choose Your Import Method
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    $ beet import /path/to/my/music
+There are two good ways to bring your *existing* library into beets database.
 
-(Note that by default, this command will *copy music into the directory you
-specified above*. If you want to use your current directory structure, set the
-``import.copy`` config option.) To take the fast,
-un-autotagged path, just say::
+.. tab-set::
 
-    $ beet import -A /my/huge/mp3/library
+    .. tab-item:: Autotag (Recommended)
 
-Note that you just need to add ``-A`` for "don't autotag".
+        This method uses beets' autotagger to find canonical metadata for every album you import. It may take a while, especially for large libraries, and it's an interactive process. But it ensures all your songs' tags are exactly right from the get-go.
 
-Adding More Music
------------------
+        .. code-block:: console
 
-If you've ripped or... otherwise obtained some new music, you can add it with
-the ``beet import`` command, the same way you imported your library. Like so::
+            beet import /a/chunk/of/my/library
 
-    $ beet import ~/some_great_album
+        .. warning::
 
-This will attempt to autotag the new album (interactively) and add it to your
-library. There are, of course, more options for this command---just type ``beet
-help import`` to see what's available.
+            The point about speed bears repeating: using the autotagger on a large library can take a
+            very long time, and it's an interactive process. So set aside a good chunk of
+            time if you're going to go that route.
+
+            We also recommend importing smaller batches of music at a time (e.g., a few albums) to make the process more manageable. For more on the interactive tagging
+            process, see :doc:`tagger`.
+
+
+    .. tab-item:: Quick Import
+
+        This method quickly brings all your files with all their current metadata into beets' database without any changes. It's really fast, but it doesn't clean up or correct any tags.
+
+        To use this method, run:
+
+        .. code-block:: console
+
+            beet import --noautotag /my/huge/mp3/library
+
+        The ``--noautotag`` / ``-A``  flag skips autotagging and uses your files' current metadata.
+
+.. admonition:: More Import Options
+
+    The ``beet import`` command has many options to customize its behavior. For
+    a full list, type ``beet help import`` or see the :ref:`import command
+    reference <import-cmd>`.
+
+Adding More Music Later
+~~~~~~~~~~~~~~~~~~~~~~~
+
+When you acquire new music, use the same ``beet import`` command to add it to
+your library:
+
+.. code-block:: console
+
+    beet import ~/new_totally_not_ripped_album
+
+This will apply the same autotagging process to your new additions. For
+alternative import behaviors, consult the options mentioned above.
 
 Seeing Your Music
 -----------------
 
-If you want to query your music library, the ``beet list`` (shortened to ``beet
-ls``) command is for you. You give it a :doc:`query string </reference/query>`,
-which is formatted something like a Google search, and it gives you a list of
-songs.  Thus::
+Once you've imported music into beets, you'll want to explore and query your
+library. Beets provides several commands for searching, browsing, and getting
+statistics about your collection.
+
+Basic Searching
+~~~~~~~~~~~~~~~
+
+The ``beet list`` command (shortened to ``beet ls``) lets you search your music
+library using :doc:`query string </reference/query>` similar to web searches:
+
+.. code-block:: console
 
     $ beet ls the magnetic fields
     The Magnetic Fields - Distortion - Three-Way
-    The Magnetic Fields - Distortion - California Girls
+    The Magnetic Fields - Dist
     The Magnetic Fields - Distortion - Old Fools
+
+.. code-block:: console
+
     $ beet ls hissing gronlandic
     of Montreal - Hissing Fauna, Are You the Destroyer? - Gronlandic Edit
+
+.. code-block:: console
+
     $ beet ls bird
     The Knife - The Knife - Bird
     The Mae Shi - Terrorbird - Revelation Six
+
+By default, search terms match against :ref:`common attributes <keywordquery>`
+of songs, and multiple terms are combined with AND logic (a track must match
+*all* criteria).
+
+Searching Specific Fields
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+To narrow a search term to a particular metadata field, prefix the term with the
+field name followed by a colon. For example, ``album:bird`` searches for "bird"
+only in the "album" field of your songs. For more details, see
+:doc:`/reference/query/`.
+
+.. code-block:: console
+
     $ beet ls album:bird
     The Mae Shi - Terrorbird - Revelation Six
 
-As you can see, search terms by default search all attributes of songs. (They're
-also implicitly joined by ANDs: a track must match *all* criteria in order to
-match the query.) To narrow a search term to a particular metadata field, just
-put the field before the term, separated by a : character. So ``album:bird``
-only looks for ``bird`` in the "album" field of your songs. (Need to know more?
-:doc:`/reference/query/` will answer all your questions.)
+This searches only the ``album`` field for the term ``bird``.
 
-The ``beet list`` command has another useful option worth mentioning, ``-a``,
-which searches for albums instead of songs::
+Searching for Albums
+~~~~~~~~~~~~~~~~~~~~
+
+The ``beet list`` command also has an ``-a`` option, which searches for albums
+instead of songs:
+
+.. code-block:: console
 
     $ beet ls -a forever
     Bon Iver - For Emma, Forever Ago
     Freezepop - Freezepop Forever
 
-So handy!
+Custom Output Formatting
+~~~~~~~~~~~~~~~~~~~~~~~~
 
-Beets also has a ``stats`` command, just in case you want to see how much music
-you have::
+There's also an ``-f`` option (for *format*) that lets you specify what gets
+displayed in the results of a search:
+
+.. code-block:: console
+
+    $ beet ls -a forever -f "[$format] $album ($year) - $artist - $title"
+    [MP3] For Emma, Forever Ago (2009) - Bon Iver - Flume
+    [AAC] Freezepop Forever (2011) - Freezepop - Harebrained Scheme
+
+In the format string, field references like ``$format``, ``$year``, ``$album``,
+etc., are replaced with data from each result.
+
+.. dropdown:: Available fields for formatting
+
+    To see all available fields you can use in custom formats, run:
+
+    .. code-block:: console
+
+        beet fields
+
+    This will display a comprehensive list of metadata fields available for your music.
+
+Library Statistics
+~~~~~~~~~~~~~~~~~~
+
+Beets can also show you statistics about your music collection:
+
+.. code-block:: console
 
     $ beet stats
     Tracks: 13019
@@ -246,25 +313,107 @@ you have::
     Artists: 548
     Albums: 1094
 
+.. admonition:: Ready for more advanced queries?
+
+    The ``beet list`` command has many additional options for sorting, limiting
+    results, and more complex queries. For a complete reference, run:
+
+    .. code-block:: console
+
+        beet help list
+
+    Or see the :ref:`list command reference <list-cmd>`.
+
 Keep Playing
 ------------
 
-This is only the beginning of your long and prosperous journey with beets. To
-keep learning, take a look at :doc:`advanced` for a sampling of what else
-is possible. You'll also want to glance over the :doc:`/reference/cli` page
-for a more detailed description of all of beets' functionality.  (Like
-deleting music! That's important.)
+Congratulations! You've now mastered the basics of beets. But this is only the
+beginning, beets has many more powerful features to explore.
 
-Also, check out :doc:`beets' plugins </plugins/index>`.  The
-real power of beets is in its extensibility---with plugins, beets can do almost
-anything for your music collection.
+Continue Your Learning Journey
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-You can always get help using the ``beet help`` command. The plain ``beet help``
-command lists all the available commands; then, for example, ``beet help
-import`` gives more specific help about the ``import`` command.
+*I was there to push people beyond what's expected of them.*
 
-Please let me know what you think of beets via `the mailing list`_ or
-`Twitter`_.
+.. grid:: 2
+    :gutter: 3
 
-.. _the mailing list: http://groups.google.com/group/beets-users
-.. _twitter: http://twitter.com/b33ts
+    .. grid-item-card:: :octicon:`zap` Advanced Techniques
+        :link: advanced
+        :link-type: doc
+
+        Explore sophisticated beets workflows including:
+
+        - Advanced tagging strategies
+        - Complex import scenarios
+        - Custom metadata management
+        - Workflow automation
+
+    .. grid-item-card:: :octicon:`terminal` Command Reference
+        :link: /reference/cli
+        :link-type: doc
+
+        Comprehensive guide to all beets commands:
+
+        - Complete command syntax
+        - All available options
+        - Usage examples
+        - **Important operations like deleting music**
+
+    .. grid-item-card:: :octicon:`plug` Plugin Ecosystem
+        :link: /plugins/index
+        :link-type: doc
+
+        Discover beets' true power through plugins:
+
+        - Metadata fetching from multiple sources
+        - Audio analysis and processing
+        - Streaming service integration
+        - Custom export formats
+
+    .. grid-item-card:: :octicon:`question` Illustrated Walkthrough
+        :link: https://beets.io/blog/walkthrough.html
+        :link-type: url
+
+        Visual, step-by-step guide covering:
+
+        - Real-world import examples
+        - Screenshots of interactive tagging
+        - Common workflow patterns
+        - Troubleshooting tips
+
+.. admonition:: Need Help?
+
+    Remember you can always use ``beet help`` to see all available commands, or
+    ``beet help [command]`` for detailed help on specific commands.
+
+Join the Community
+~~~~~~~~~~~~~~~~~~
+
+We'd love to hear about your experience with beets!
+
+.. grid:: 2
+    :gutter: 2
+
+    .. grid-item-card:: :octicon:`comment-discussion` Discussion Board
+        :link: https://github.com/beetbox/beets/discussions
+        :link-type: url
+
+        - Ask questions
+        - Share tips and tricks
+        - Discuss feature ideas
+        - Get help from other users
+
+    .. grid-item-card:: :octicon:`git-pull-request` Developer Resources
+        :link: /dev/index
+        :link-type: doc
+
+        - Contribute code
+        - Report issues
+        - Review pull requests
+        - Join development discussions
+
+.. admonition:: Found a Bug?
+
+    If you encounter any issues, please report them on our `GitHub Issues page
+    <https://github.com/beetbox/beets/issues>`_.

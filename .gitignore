@@ -7,7 +7,6 @@
 
 # Project Specific patterns
 man
-test/rsrc/lyrics/*
 
 # The rest is from https://www.gitignore.io/api/python
 
@@ -30,7 +29,7 @@ downloads/
 eggs/
 .eggs/
 lib/
-lib64/
+lib64
 parts/
 sdist/
 var/
@@ -54,10 +53,10 @@ htmlcov/
 .coverage
 .coverage.*
 .cache
-nosetests.xml
 coverage.xml
 *,cover
 .hypothesis/
+.reports
 
 # Flask stuff:
 instance/
@@ -76,7 +75,9 @@ target/
 .env
 
 # virtualenv
+env/
 venv/
+.venv/
 ENV/
 
 # Spyder project settings
@@ -89,3 +90,10 @@ ENV/
 /.project
 /.pydevproject
 /.settings
+.vscode
+
+# pyright
+pyrightconfig.json
+
+# Pyrefly
+pyrefly.toml
